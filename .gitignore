@@ -1,0 +1,81 @@
+﻿# Python / Django
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
+# Local databases and backups
+*.sqlite3
+*.sqlite3-*
+*.db
+*.dump
+*.bak
+*.backup
+*.sql
+*.pgdump
+
+# Node / React
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+
+# Uploaded reports and EDI data
+media/
+uploads/
+data/
+reports/
+backups/
+*.835
+*.837
+*.edi
+*.xlsx
+*.xls
+*.csv
+*.txt
+*.zip
+*.parquet
+
+# Editor / system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local Docker testing
+docker-compose.test.yml
+docker-compose.test.yml.bak
+docker-compose.test.yml.before-worker
+
+# Local client/EDI data
+client-data/
+*.dump
+*.backup
+
+# Additional local secrets
+.env*
+!.env.example
+!.env.sample
+
+docker-compose.yml.before-github
+
+docker-compose.yml.before-github
+
+backend/portal/settings.py.before-github
