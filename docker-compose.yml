@@ -33,6 +33,7 @@ services:
     volumes:
       - ./backend:/app
       - ./client-data:/data/clients:ro
+      - ./local-agent/runtime:/agent-config
     command: sh -c 'python manage.py makemigrations claims --noinput && python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000'
   indexer:
     build: ./backend
@@ -49,7 +50,7 @@ services:
     volumes:
       - ./backend:/app
       - ./client-data:/data/clients:ro
-    command: sh -c 'sleep 15; while true; do python manage.py index_client_folder --client XYZ; python manage.py index_client_folder --client PQR; sleep 900; done'
+    command: python manage.py process_folder_scans --watch --interval 30
   frontend:
     image: node:22-alpine
     working_dir: /app

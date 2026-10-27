@@ -79,3 +79,19 @@ docker-compose.yml.before-github
 docker-compose.yml.before-github
 
 backend/portal/settings.py.before-github
+
+# Local Windows agent configuration
+/local-agent/config.json
+/local-agent/*.log
+
+/local-agent/runtime/
+
+# Local development backups
+*.encoding-backup
+*.before-encoding-fix
+*.py.bak
+*.jsx.bak
+
+/local-agent/*.before-dynamic
+
+/frontend/src/App.jsx.before-auth-fix

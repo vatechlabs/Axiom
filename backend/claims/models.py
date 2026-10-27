@@ -13,6 +13,11 @@ class ClientFolderConfig(models.Model):
     error_reports_path = models.TextField(blank=True)
     edi_835_path = models.TextField(blank=True)
     edi_837_path = models.TextField(blank=True)
+
+    # Original Windows folder paths configured through Axiom Settings
+    windows_error_reports_path = models.TextField(blank=True)
+    windows_835_path = models.TextField(blank=True)
+    windows_837_path = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
