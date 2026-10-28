@@ -3,6 +3,7 @@ from django.core.management.base import BaseCommand
 from django.db import close_old_connections
 from claims.models import Client, FolderScanSchedule
 from claims.folder_processing import process_client
+from claims.recon_processing import scan_recon_files
 
 class Command(BaseCommand):
     help='Process due schedules and queued manual scans. Run continuously or every minute through Task Scheduler.'
@@ -22,5 +23,11 @@ class Command(BaseCommand):
                     if ran:self.stdout.write(f'Finished scan attempt for {client.code}')
                 except Exception as exc:
                     self.stderr.write(f'{client.code}: {exc}')
+            # RECON must also work for clients with no LAG scan schedule.
+            for client in Client.objects.filter(folder_config__isnull=False).order_by('id'):
+                try:
+                    scan_recon_files(client)
+                except Exception as exc:
+                    self.stderr.write(f'{client.code} RECON: {exc}')
             if not options['watch']:break
             time.sleep(max(10,options['interval']))

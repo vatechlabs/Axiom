@@ -1,7 +1,12 @@
 ﻿$ErrorActionPreference = "Stop"
 
 $agent = Join-Path $PSScriptRoot "agent.py"
-$python = (Get-Command pythonw.exe -ErrorAction Stop).Source
+$pythonExe = (& py -c "import sys; print(sys.executable)").Trim()
+$python = Join-Path (Split-Path $pythonExe -Parent) "pythonw.exe"
+
+if (-not (Test-Path $python)) {
+    throw "pythonw.exe not found: $python"
+}
 $startup = [Environment]::GetFolderPath("Startup")
 $shortcutPath = Join-Path $startup "Axiom Folder Agent.lnk"
 

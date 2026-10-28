@@ -90,3 +90,34 @@
 .processing-history p {font-size:13px;margin:14px 0;line-height:1.7;}
 .processing-history small {display:block;color:#667d9b;}
 .processing-panel .history-table td {font-size:13px;vertical-align:top;}
+
+/* RECON preview and single-column LAG upload. */
+.intake-single{display:block}.intake-single>.intake-panel{max-width:850px}
+.recon-note{margin-bottom:15px;font-size:13px}.recon-surface{min-height:450px}
+.recon-filters{display:flex;align-items:end;gap:12px;flex-wrap:wrap;padding:18px 22px}
+.recon-filters .compact-search{flex:2;min-width:230px}
+.recon-field{display:grid;gap:6px;font-size:12px;color:#687d9b;min-width:145px}
+.recon-field select,.recon-field input{background:white;border:1px solid #dfe6f3;border-radius:7px;padding:9px;font:inherit;color:#243a5a}
+.recon-field :disabled{opacity:.65;cursor:not-allowed}.recon-pages{justify-content:space-between}
+@media(max-width:700px){.recon-filters{padding:12px}.recon-filters .compact-search{flex-basis:100%}}
+
+/* RECON v3: readable, compact column-based records with full details in a modal. */
+.recon-scroll{overflow:auto;max-height:min(70vh,820px)}
+.recon-table{min-width:1200px;width:100%;table-layout:auto}
+.recon-table th{white-space:nowrap;position:sticky;top:0;z-index:2}
+.recon-table td{white-space:nowrap;vertical-align:middle;font-size:12px}
+.recon-table td:first-child,.recon-table th:first-child{width:42px;padding:12px}
+.recon-table .recon-num{text-align:right;font-variant-numeric:tabular-nums}
+.recon-table .recon-file-name{max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.recon-table .recon-view{white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+.recon-detail-header{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-size:12px;margin-bottom:16px;color:#667d9b}
+.recon-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;max-height:55vh;overflow-y:auto}
+.recon-detail-field{min-width:0;background:#f8faff;border:1px solid #e5ebf6;border-radius:8px;padding:11px}
+.recon-detail-key{font-size:11px;font-weight:700;letter-spacing:.03em;color:#657b9a;overflow-wrap:anywhere}
+.recon-detail-value{font-size:13px;color:#243a5a;margin-top:6px;overflow-wrap:anywhere}
+.recon-original-line{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8faff;border:1px solid #e5ebf6;border-radius:9px;padding:15px;font-size:12px}
+@media(max-width:650px){.recon-detail-grid{grid-template-columns:1fr}}
+
+/* Highmark raw PA7 source fields: display actual original characters, never guessed labels. */
+.recon-table .recon-raw-cell {min-width:135px;max-width:230px;vertical-align:top;}
+.recon-table .recon-raw-cell span {display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;line-height:1.55;}

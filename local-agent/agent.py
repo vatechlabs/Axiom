@@ -13,6 +13,9 @@ FOLDER_TYPES = {
     "error_reports": {".txt"},
     "835": {".835", ".edi", ".txt"},
     "837": {".837", ".edi", ".txt"},
+    "recon": {".txt", ".csv", ".xlsx", ".xls", ".dat", ".recon", ".pa7"},
+    "recon_musgrove": {".txt", ".csv", ".xlsx", ".xls", ".dat", ".recon"},
+    "recon_abc": {".txt", ".csv", ".xlsx", ".xls", ".dat", ".recon"},
 }
 
 
@@ -79,7 +82,9 @@ def run():
             print("Skipping invalid client directory")
             continue
 
-        for kind in FOLDER_TYPES:
+        allowed = (('error_reports','835','837','recon_musgrove','recon_abc')
+                   if client == 'WGS' else ('error_reports','835','837','recon'))
+        for kind in allowed:
             source = paths.get(kind)
             if not source:
                 continue

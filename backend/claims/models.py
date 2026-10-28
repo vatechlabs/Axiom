@@ -18,6 +18,10 @@ class ClientFolderConfig(models.Model):
     windows_error_reports_path = models.TextField(blank=True)
     windows_835_path = models.TextField(blank=True)
     windows_837_path = models.TextField(blank=True)
+    windows_recon_path = models.TextField(blank=True)
+    recon_path = models.TextField(blank=True)
+    windows_recon_musgrove_path = models.TextField(blank=True)
+    windows_recon_abc_path = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -183,3 +187,35 @@ class FolderFileState(models.Model):
     modified_ns=models.BigIntegerField()
     class Meta:
         constraints=[models.UniqueConstraint(fields=['client','kind','path_hash'],name='unique_folder_file_state')]
+
+
+class ReconFile(models.Model):
+    """One independent RECON source file; no LAG/EDI claim linkage."""
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='recon_files')
+    sub_client = models.CharField(max_length=24, default='', blank=True)
+    path = models.TextField()
+    filename = models.CharField(max_length=255)
+    fingerprint = models.CharField(max_length=64, blank=True)
+    size = models.BigIntegerField(default=0)
+    modified_ns = models.BigIntegerField(default=0)
+    status = models.CharField(max_length=20, default='pending')
+    row_count = models.PositiveIntegerField(default=0)
+    error = models.TextField(blank=True)
+    indexed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['client', 'sub_client', 'path'], name='uniq_recon_file_location')]
+        indexes = [models.Index(fields=['client','sub_client','indexed_at'], name='recon_client_sub_dt_idx')]
+
+
+class ReconRecord(models.Model):
+    """Exact RECON row values saved separately. Raw data retained for audit."""
+    source = models.ForeignKey(ReconFile, on_delete=models.CASCADE, related_name='records')
+    row_number = models.PositiveIntegerField()
+    claim_number = models.CharField(max_length=100, db_index=True, blank=True)
+    claim_date = models.DateField(null=True, blank=True)
+    raw_data = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['source','row_number'], name='uniq_recon_file_row')]
+        indexes = [models.Index(fields=['claim_date','claim_number'], name='recon_date_claim_idx')]
