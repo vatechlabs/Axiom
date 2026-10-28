@@ -17,8 +17,15 @@ from .models import Claim,ClaimNote,ErrorHistory,EdiDocument,ImportBatch,Members
 from .serializers import ClientSerializer,ClaimSerializer,ClaimDetailSerializer,ClaimNoteSerializer
 from .querying import snapshot_query, filter_query, rows_for
 from .permissions import allowed_client,can_edit
+from .app_roles import role_name,is_demo,is_operator
 from .importers import import_lag,parse_lag
 from .folder_paths import client_paths, validate_path, allowed_roots
+
+def _available_clients(user):
+ from .models import Client
+ if is_demo(user) or is_operator(user):
+  return ClientSerializer(Client.objects.all().order_by('code'),many=True).data
+ return ClientSerializer([m.client for m in Membership.objects.select_related('client').filter(user=user)],many=True).data
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -26,7 +33,7 @@ def login(request):
  u=authenticate(username=request.data.get('username',''),password=request.data.get('password',''))
  if not u:return Response({'detail':'Invalid credentials'},status=400)
  token,_=Token.objects.get_or_create(user=u)
- return Response({'token':token.key,'username':u.username,'clients':ClientSerializer([m.client for m in Membership.objects.select_related('client').filter(user=u)],many=True).data})
+ return Response({'token':token.key,'username':u.username,'role':role_name(u),'clients':_available_clients(u)})
 
 @api_view(['POST'])
 def logout(request):
@@ -35,10 +42,11 @@ def logout(request):
 
 @api_view(['GET'])
 def me(request):
- return Response({'username':request.user.username,'clients':ClientSerializer([m.client for m in Membership.objects.select_related('client').filter(user=request.user)],many=True).data})
+ return Response({'username':request.user.username,'role':role_name(request.user),'clients':_available_clients(request.user)})
 
 @api_view(['POST'])
 def change_password(request):
+ if is_demo(request.user):return Response({'detail':'Demo credentials cannot be changed.'},status=403)
  u=request.user
  if not u.check_password(request.data.get('current_password','')):return Response({'detail':'Current password is incorrect'},status=400)
  if request.data.get('new_password')!=request.data.get('confirm_password'):return Response({'detail':'Passwords do not match'},status=400)
@@ -226,8 +234,8 @@ def upload_lag(request):
 def folder_settings(request):
  client=allowed_client(request)
  if request.method=='GET':
-  return Response({'client':client.code, 'paths':client_paths(client), 'editable':request.user.is_superuser or Membership.objects.filter(user=request.user,client=client,role='admin').exists()})
- if not (request.user.is_superuser or Membership.objects.filter(user=request.user,client=client,role='admin').exists()):
+  return Response({'client':client.code, 'paths':client_paths(client), 'editable':is_operator(request.user)})
+ if not is_operator(request.user):
   return Response({'detail':'Only client administrators may edit folder paths.'},status=403)
  paths=request.data.get('paths')
  if not isinstance(paths,dict) or set(paths)!={'error_reports','835','837'}:

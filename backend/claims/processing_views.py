@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import FolderScanSchedule, FolderScanRun, EdiDocument, ErrorHistory, Membership
+from .app_roles import is_operator
 from .permissions import allowed_client,can_edit
 from .folder_processing import queue_scan
 
@@ -19,7 +20,7 @@ def schedule_data(schedule):
 def processing_schedule(request):
     client=allowed_client(request)
     schedule,_=FolderScanSchedule.objects.get_or_create(client=client)
-    editable=request.user.is_superuser or Membership.objects.filter(client=client,user=request.user,role='admin').exists()
+    editable=is_operator(request.user)
     if request.method=='PUT':
         if not editable:return Response({'detail':'Only client administrators may change the schedule.'},status=403)
         data=request.data
@@ -42,7 +43,7 @@ def processing_schedule(request):
             # A changed timezone starts a new local-day schedule; otherwise do not rerun today twice.
             if schedule.timezone_name!=name:schedule.last_scheduled_date=None
             schedule.enabled=enabled;schedule.daily_time=daily;schedule.weekdays=sorted(set(days));schedule.timezone_name=name;schedule.save()
-    return Response({'schedule':schedule_data(schedule),'editable':editable,'can_run':Membership.objects.filter(client=client,user=request.user,role__in=['admin','analyst']).exists()})
+    return Response({'schedule':schedule_data(schedule),'editable':editable,'can_run':is_operator(request.user)})
 
 @api_view(['POST'])
 def processing_run(request):

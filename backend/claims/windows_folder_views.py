@@ -8,6 +8,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import ClientFolderConfig, Membership
+from .app_roles import is_operator
 from .permissions import allowed_client
 from .windows_paths import validate_windows_path
 
@@ -57,14 +58,7 @@ def publish_agent_config():
 def windows_folder_settings(request):
     client = allowed_client(request)
 
-    editable = (
-        request.user.is_superuser
-        or Membership.objects.filter(
-            user=request.user,
-            client=client,
-            role="admin",
-        ).exists()
-    )
+    editable = is_operator(request.user)
 
     cfg, _ = ClientFolderConfig.objects.get_or_create(client=client)
 
