@@ -67,7 +67,7 @@ def perform_scan(run,schedule):
                     continue
                 try:
                     path=path.resolve()
-                    if not any(path.is_relative_to(root) for root in roots):
+                    if rule is None and not any(path.is_relative_to(root) for root in roots):
                         raise ValueError('File is outside approved roots')
                     if not path.is_file():
                         continue

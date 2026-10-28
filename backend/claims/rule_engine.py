@@ -1,4 +1,5 @@
 """Rule based folder selection shared by error, EDI, and RECON indexing."""
+import os
 from pathlib import Path
 from django.conf import settings
 from .models import FileSourceRule
@@ -7,7 +8,11 @@ TYPES = ('error_reports','835','837','recon_abc','recon_musgrove','recon')
 DEFAULT_EXT = {'error_reports':'.txt','835':'.835,.edi,.txt','837':'.837,.edi,.txt','recon_abc':'.csv','recon_musgrove':'.csv','recon':'.pa7,.csv'}
 
 def valid_root(path):
-    resolved=Path(path).resolve()
+    resolved = Path(path).resolve()
+    # Native Windows: allow absolute local and UNC paths that the service can read.
+    # Docker/Linux: preserve explicitly approved roots.
+    if os.name == 'nt':
+        return resolved.is_absolute() and resolved.is_dir()
     return any(resolved.is_relative_to(Path(root).resolve()) for root in settings.EDI_ALLOWED_ROOTS)
 
 def match_file(rule, path):
