@@ -219,3 +219,18 @@ class ReconRecord(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=['source','row_number'], name='uniq_recon_file_row')]
         indexes = [models.Index(fields=['claim_date','claim_number'], name='recon_date_claim_idx')]
+
+
+class FileSourceRule(models.Model):
+    client=models.ForeignKey(Client,on_delete=models.CASCADE,related_name='file_source_rules')
+    file_type=models.CharField(max_length=30)
+    folder_path=models.TextField()
+    starts_with=models.CharField(max_length=500,blank=True)
+    ends_with=models.CharField(max_length=500,blank=True)
+    extensions=models.CharField(max_length=500,blank=True)
+    recursive=models.BooleanField(default=False)
+    include_subfolders=models.TextField(blank=True)
+    exclude_subfolders=models.TextField(blank=True)
+    enabled=models.BooleanField(default=True)
+    class Meta:
+        indexes=[models.Index(fields=['client','file_type','enabled'],name='file_rule_client_idx')]

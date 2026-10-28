@@ -1,7 +1,7 @@
 import time
 from django.core.management.base import BaseCommand
-from django.db import close_old_connections
-from claims.models import Client, FolderScanSchedule
+from django.db import close_old_connections, models
+from claims.models import Client, FolderScanSchedule, FileSourceRule
 from claims.folder_processing import process_client
 from claims.recon_processing import scan_recon_files
 
@@ -24,7 +24,7 @@ class Command(BaseCommand):
                 except Exception as exc:
                     self.stderr.write(f'{client.code}: {exc}')
             # RECON must also work for clients with no LAG scan schedule.
-            for client in Client.objects.filter(folder_config__isnull=False).order_by('id'):
+            for client in Client.objects.filter(models.Q(folder_config__isnull=False) | models.Q(file_source_rules__isnull=False)).distinct().order_by('id'):
                 try:
                     scan_recon_files(client)
                 except Exception as exc:

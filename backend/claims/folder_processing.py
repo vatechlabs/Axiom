@@ -9,6 +9,7 @@ from django.utils import timezone
 from .models import (Client, FolderScanSchedule, FolderScanRun, FolderScanItem,
                      FolderFileState, EdiDocument, ErrorHistory)
 from .folder_paths import client_paths, allowed_roots
+from .rule_engine import rules_for, has_rules, rule_files
 from .importers import index_edi, import_errors, reconcile_client
 from .processing_locks import client_processing_lock, ClientProcessingBusy
 
@@ -39,58 +40,67 @@ def perform_scan(run,schedule):
     paths=client_paths(client)
     roots=allowed_roots()
     processed=skipped=deferred=failed=0
+    seen_files=set()
     for key,kind in [('error_reports','error'),('835','835'),('837','837')]:
-        folder=Path(paths[key]).resolve()
-        try:
-            if not any(folder.is_relative_to(root) for root in roots) or not folder.is_dir():
-                raise ValueError('Folder missing, inaccessible, or outside approved roots')
-            candidates=sorted(folder.rglob('*'))
-        except Exception as exc:
-            _item(run,kind,folder,'failed',message=str(exc));failed+=1;continue
-        for path in candidates:
-            if path.name.startswith('.'):
-                continue
-            suffix=path.suffix.lower()
-            if kind=='error' and suffix!='.txt':
-                continue
-            if kind!='error' and suffix not in ('.edi','.'+kind,'.txt'):
-                continue
+        rules=rules_for(client,key) if has_rules(client,key) else [None]
+        for rule in rules:
+            folder=Path(rule.folder_path if rule else paths[key]).resolve()
             try:
-                path=path.resolve()
-                if not any(path.is_relative_to(root) for root in roots):
-                    raise ValueError('File is outside approved roots')
-                if not path.is_file():
-                    continue
-                before=path.stat()
-                # Ignore transfers still settling; the next scheduled/manual run retries.
-                if timezone.now().timestamp()-before.st_mtime<60:
-                    _item(run,kind,path,'deferred',message='Recently modified; waiting for transfer to finish. Run again after 60 seconds.');deferred+=1;continue
-                digest=hashlib.sha256(str(path).encode('utf-8')).hexdigest()
-                state=FolderFileState.objects.filter(client=client,kind=kind,path_hash=digest).first()
-                if state and (state.bytes_size,state.modified_ns)==(before.st_size,before.st_mtime_ns):
-                    skipped+=1;continue
-                # Persist before indexing: a crash must not lose the need to reconcile.
-                FolderScanSchedule.objects.filter(pk=schedule.pk).update(needs_reconcile=True,worker_seen_at=timezone.now())
-                if kind=='error':
-                    with transaction.atomic():
-                        obj,unchanged=import_errors(client,path,reconcile=False)
-                        after=path.stat()
-                        if (before.st_size,before.st_mtime_ns)!=(after.st_size,after.st_mtime_ns):
-                            raise ValueError('File changed during import; rolled back and will retry')
-                    count=obj.processed_count
-                    refs={'import_batch':obj}
+                if rule:
+                    candidates=sorted(rule_files(rule))
                 else:
-                    obj,unchanged=index_edi(client,path,kind)
-                    count=obj.claims_indexed.count()
-                    refs={'edi_file':obj}
-                FolderFileState.objects.update_or_create(client=client,kind=kind,path_hash=digest,defaults={'bytes_size':before.st_size,'modified_ns':before.st_mtime_ns})
-                _item(run,kind,path,'unchanged' if unchanged else 'indexed',indexed_count=count,**refs)
-                if unchanged:skipped+=1
-                else:processed+=1
+                    if not any(folder.is_relative_to(root) for root in roots) or not folder.is_dir():
+                        raise ValueError('Folder missing, inaccessible, or outside approved roots')
+                    candidates=sorted(folder.rglob('*'))
             except Exception as exc:
-                failed+=1
-                _item(run,kind,path,'failed',message=str(exc)[:3000])
-            FolderScanRun.objects.filter(pk=run.pk).update(processed=processed,skipped=skipped,deferred=deferred,failed=failed)
+                _item(run,kind,folder,'failed',message=str(exc));failed+=1;continue
+            for path in candidates:
+                identity=(kind,str(path).casefold())
+                if identity in seen_files:continue
+                seen_files.add(identity)
+                if path.name.startswith('.'):
+                    continue
+                suffix=path.suffix.lower()
+                if kind=='error' and suffix!='.txt':
+                    continue
+                if kind!='error' and suffix not in ('.edi','.'+kind,'.txt'):
+                    continue
+                try:
+                    path=path.resolve()
+                    if not any(path.is_relative_to(root) for root in roots):
+                        raise ValueError('File is outside approved roots')
+                    if not path.is_file():
+                        continue
+                    before=path.stat()
+                    # Ignore transfers still settling; the next scheduled/manual run retries.
+                    if timezone.now().timestamp()-before.st_mtime<60:
+                        _item(run,kind,path,'deferred',message='Recently modified; waiting for transfer to finish. Run again after 60 seconds.');deferred+=1;continue
+                    digest=hashlib.sha256(str(path).encode('utf-8')).hexdigest()
+                    state=FolderFileState.objects.filter(client=client,kind=kind,path_hash=digest).first()
+                    if state and (state.bytes_size,state.modified_ns)==(before.st_size,before.st_mtime_ns):
+                        skipped+=1;continue
+                    # Persist before indexing: a crash must not lose the need to reconcile.
+                    FolderScanSchedule.objects.filter(pk=schedule.pk).update(needs_reconcile=True,worker_seen_at=timezone.now())
+                    if kind=='error':
+                        with transaction.atomic():
+                            obj,unchanged=import_errors(client,path,reconcile=False)
+                            after=path.stat()
+                            if (before.st_size,before.st_mtime_ns)!=(after.st_size,after.st_mtime_ns):
+                                raise ValueError('File changed during import; rolled back and will retry')
+                        count=obj.processed_count
+                        refs={'import_batch':obj}
+                    else:
+                        obj,unchanged=index_edi(client,path,kind)
+                        count=obj.claims_indexed.count()
+                        refs={'edi_file':obj}
+                    FolderFileState.objects.update_or_create(client=client,kind=kind,path_hash=digest,defaults={'bytes_size':before.st_size,'modified_ns':before.st_mtime_ns})
+                    _item(run,kind,path,'unchanged' if unchanged else 'indexed',indexed_count=count,**refs)
+                    if unchanged:skipped+=1
+                    else:processed+=1
+                except Exception as exc:
+                    failed+=1
+                    _item(run,kind,path,'failed',message=str(exc)[:3000])
+                FolderScanRun.objects.filter(pk=run.pk).update(processed=processed,skipped=skipped,deferred=deferred,failed=failed)
     schedule.refresh_from_db()
     if schedule.needs_reconcile:
         FolderScanRun.objects.filter(pk=run.pk).update(message='Indexing complete. Refreshing claim links…')
