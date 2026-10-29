@@ -1,5 +1,7 @@
 """Rule based folder selection shared by error, EDI, and RECON indexing."""
 import os
+import re
+from datetime import datetime
 from pathlib import Path
 from django.conf import settings
 from .models import FileSourceRule
@@ -24,7 +26,30 @@ def wgs_835_year_allowed(path):
     return len(stem) >= 5 and stem[3:5].isdigit() and int(stem[3:5]) >= 25
 
 
+def wgs_837_year_allowed(path):
+    """WGS 837: accept MMDDYYYY embedded in filename, year >= 2025.
+
+    Examples: ...mcsjaa10282024... -> False
+              ...mcsjaa10282026... -> True
+    Files without a valid MMDDYYYY date are excluded.
+    """
+    for match in re.finditer(
+        r'(?<![0-9])((?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])(20[0-9]{2}))',
+        path.stem,
+    ):
+        try:
+            date = datetime.strptime(match.group(1), '%m%d%Y')
+        except ValueError:
+            continue
+        if date.year >= 2025:
+            return True
+    return False
+
+
 def match_file(rule, path):
+    if rule.file_type == '837' and rule.client.code.upper() == 'WGS':
+        if not wgs_837_year_allowed(path):
+            return False
     if rule.file_type == '835' and rule.client.code.upper() == 'WGS':
         if not wgs_835_year_allowed(path):
             return False
