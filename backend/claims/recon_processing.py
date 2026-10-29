@@ -119,6 +119,21 @@ def scan_recon_files(client):
                     if now-stat.st_mtime<60:
                         continue
                     current=ReconFile.objects.filter(client=client,sub_client=sub_client,path=str(source)).first()
+                    if stat.st_size == 0:
+                        # Empty files are not parse failures. Retry if content arrives later.
+                        if not (current and current.status == 'skipped' and
+                                current.size == 0 and current.modified_ns == stat.st_mtime_ns):
+                            ReconFile.objects.update_or_create(
+                                client=client, sub_client=sub_client, path=str(source),
+                                defaults={
+                                    'filename': source.name,
+                                    'status': 'skipped',
+                                    'error': 'Empty file (0 bytes); skipped.',
+                                    'size': 0,
+                                    'modified_ns': stat.st_mtime_ns,
+                                },
+                            )
+                        continue
                     if current and current.status=='indexed' and current.size==stat.st_size and current.modified_ns==stat.st_mtime_ns:
                         continue
                     payload=list(parse_records(source))
