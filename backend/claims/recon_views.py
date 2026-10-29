@@ -4,7 +4,8 @@ import json
 from datetime import date
 
 from django.http import HttpResponse
-from django.db.models import Q
+from django.db.models import Q, TextField
+from django.db.models.functions import Cast
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import ReconFile, ReconRecord
@@ -34,7 +35,11 @@ def _records(request):
         except ValueError:return client,qs.none(),False
         qs=qs.filter(source_id=fid)
     q=request.query_params.get('search','').strip()
-    if q:qs=qs.filter(claim_number__icontains=q)
+    if q:
+        qs=qs.annotate(search_raw=Cast('raw_data', output_field=TextField())).filter(
+            Q(claim_number__icontains=q) | Q(source__filename__icontains=q) |
+            Q(search_raw__icontains=q)
+        )
     when=request.query_params.get('claim_date','').strip()
     if when:
         try:qs=qs.filter(claim_date=date.fromisoformat(when))

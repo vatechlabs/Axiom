@@ -48,7 +48,7 @@ def filter_query(qs, params):
         qs = qs.filter(conditions)
     search = params.get('search', '').strip()
     if search:
-        qs = qs.filter(Q(s_number__icontains=search) | Q(s_dcn__icontains=search) | Q(s_fund__icontains=search) | Q(s_error__icontains=search))
+        qs = qs.filter(Q(s_number__icontains=search) | Q(s_dcn__icontains=search) | Q(s_fund__icontains=search) | Q(s_tpa__icontains=search) | Q(s_error__icontains=search))
     for field in ('tpa_age', 'total_age'):
         bounds = {}
         for suffix, lookup in (('min', 'gte'), ('max', 'lte')):
