@@ -234,3 +234,11 @@ class FileSourceRule(models.Model):
     enabled=models.BooleanField(default=True)
     class Meta:
         indexes=[models.Index(fields=['client','file_type','enabled'],name='file_rule_client_idx')]
+
+class SmbCredential(models.Model):
+    """Encrypted share credentials. The encryption key is stored outside the DB."""
+    client=models.OneToOneField(Client,on_delete=models.CASCADE,related_name='smb_credential')
+    share_path=models.CharField(max_length=255)
+    username=models.CharField(max_length=255)
+    password_ciphertext=models.BinaryField()
+    updated_at=models.DateTimeField(auto_now=True)

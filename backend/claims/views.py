@@ -161,9 +161,20 @@ def edi_download(request,pk,doc_id):
  doc=get_object_or_404(EdiDocument.objects.select_related('edi_file','edi_index'),pk=doc_id,claim=c,edi_file__client=client)
  from pathlib import Path
  from .edi_excerpt import extract_claim_excerpt,extract_transaction
+ from .smb_auth import connect_for_edi_path
+ try:
+  connect_for_edi_path(client,doc.edi_file.path)
+ except (OSError,RuntimeError):
+  return Response({'detail':'EDI network share unavailable; check server credentials.'},status=503)
  path=Path(doc.edi_file.path).resolve()
  if not any(path.is_relative_to(root) for root in allowed_roots()):
-  return Response({'detail':'EDI path not permitted'},status=403)
+  from .models import FileSourceRule
+  from .smb_auth import DEFAULT_SHARE
+  candidate=str(path).casefold()
+  allowed_unc=(client.code.upper()=='WGS' and candidate.startswith(DEFAULT_SHARE.casefold()+chr(92)) and
+               any(candidate.startswith(str(Path(r.folder_path)).casefold().rstrip(chr(92))+chr(92))
+                   for r in FileSourceRule.objects.filter(client=client,file_type=doc.kind,enabled=True)))
+  if not allowed_unc:return Response({'detail':'EDI path not permitted'},status=403)
  if not path.is_file():
   return Response({'detail':'Indexed EDI file is no longer accessible'},status=404)
  if doc.edi_index_id is None or doc.edi_index.start_byte is None:

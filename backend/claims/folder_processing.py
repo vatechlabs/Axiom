@@ -12,6 +12,7 @@ from .folder_paths import client_paths, allowed_roots
 from .rule_engine import rules_for, has_rules, rule_files, wgs_835_year_allowed, wgs_837_year_allowed
 from .importers import index_edi, import_errors, reconcile_client
 from .processing_locks import client_processing_lock, ClientProcessingBusy
+from .smb_auth import connect_share
 
 
 def queue_scan(client, trigger='manual'):
@@ -42,6 +43,13 @@ def perform_scan(run,schedule):
     processed=skipped=deferred=failed=0
     seen_files=set()
     for key,kind in [('error_reports','error'),('835','835'),('837','837')]:
+        if client.code.upper()=='WGS' and key in ('835','837'):
+            try:
+                connect_share(client)
+            except (OSError, RuntimeError) as exc:
+                failed += 1
+                _item(run,kind,Path('WGS_'+kind),'failed',message=str(exc)[:3000])
+                continue
         rules=rules_for(client,key) if has_rules(client,key) else [None]
         for rule in rules:
             folder=Path(rule.folder_path if rule else paths[key]).resolve()

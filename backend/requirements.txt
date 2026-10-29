@@ -9,3 +9,4 @@ msoffcrypto-tool>=5,<6
 
 # IANA timezone data for scheduled scans on Windows.
 tzdata>=2025.1
+cryptography>=43,<47
