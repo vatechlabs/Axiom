@@ -1,4 +1,5 @@
 """Client-scoped administrator folder rule CRUD."""
+import os
 from pathlib import Path
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -25,9 +26,19 @@ def folder_rules(request):
         kind=str(request.data.get('file_type',rule.file_type)).strip()
         if kind not in TYPES:return Response({'detail':'Invalid file type.'},status=400)
         folder=str(request.data.get('folder_path',rule.folder_path)).strip()
-        if len(folder)>2000 or not Path(folder).is_absolute() or any(x in folder for x in ('*','?')):
+        if (len(folder)>2000 or not Path(folder).is_absolute()
+                or any(x in folder for x in ('*','?', '\x00', '\r', '\n'))):
             return Response({'detail':'Enter an absolute folder path without wildcards.'},status=400)
-        if not valid_root(folder):return Response({'detail':'Folder outside approved EDI_ALLOWED_ROOTS.'},status=400)
+        # Editing a rule must not require the web service to open a remote SMB
+        # folder. Scanner access is independently validated when scanning.
+        # On Linux retain the explicitly approved EDI_ALLOWED_ROOTS boundary.
+        if os.name != 'nt':
+            try:
+                approved = valid_root(folder)
+            except (OSError, ValueError) as exc:
+                return Response({'detail':'Cannot validate configured folder: '+str(exc)},status=400)
+            if not approved:
+                return Response({'detail':'Folder outside approved EDI_ALLOWED_ROOTS.'},status=400)
         rule.file_type=kind;rule.folder_path=str(Path(folder))
         for field in ('starts_with','ends_with','extensions','include_subfolders','exclude_subfolders'):
             value=request.data.get(field,getattr(rule,field) or (DEFAULT_EXT[kind] if field=='extensions' else ''))
