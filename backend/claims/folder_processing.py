@@ -9,7 +9,7 @@ from django.utils import timezone
 from .models import (Client, FolderScanSchedule, FolderScanRun, FolderScanItem,
                      FolderFileState, EdiDocument, ErrorHistory)
 from .folder_paths import client_paths, allowed_roots
-from .rule_engine import rules_for, has_rules, rule_files
+from .rule_engine import rules_for, has_rules, rule_files, wgs_835_year_allowed
 from .importers import index_edi, import_errors, reconcile_client
 from .processing_locks import client_processing_lock, ClientProcessingBusy
 
@@ -61,6 +61,8 @@ def perform_scan(run,schedule):
                 if path.name.startswith('.'):
                     continue
                 suffix=path.suffix.lower()
+                if kind=='835' and client.code.upper()=='WGS' and not wgs_835_year_allowed(path):
+                    continue
                 if kind=='error' and suffix!='.txt':
                     continue
                 if kind!='error' and suffix not in ('.edi','.'+kind,'.txt'):

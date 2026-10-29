@@ -15,7 +15,19 @@ def valid_root(path):
         return resolved.is_absolute() and resolved.is_dir()
     return any(resolved.is_relative_to(Path(root).resolve()) for root in settings.EDI_ALLOWED_ROOTS)
 
+def wgs_835_year_allowed(path):
+    """WGS 835 filename positions 4-5 represent a two-digit year.
+
+    Allow 25-99; ignore malformed names and years 00-24.
+    """
+    stem = path.stem
+    return len(stem) >= 5 and stem[3:5].isdigit() and int(stem[3:5]) >= 25
+
+
 def match_file(rule, path):
+    if rule.file_type == '835' and rule.client.code.upper() == 'WGS':
+        if not wgs_835_year_allowed(path):
+            return False
     stem=path.stem.casefold()
     prefixes=[x.strip().casefold() for x in rule.starts_with.split(',') if x.strip()]
     suffixes=[x.strip().casefold() for x in rule.ends_with.split(',') if x.strip()]
