@@ -81,20 +81,30 @@ def parse_lag(blob,password=None):
     return rows
 
 def import_lag(client,blob,filename,report_date,password=None,user=None):
-    from .processing_locks import client_processing_lock
+    from .processing_locks import client_processing_lock, lag_upload_lock, ClientProcessingBusy
     from .models import FolderScanSchedule
     from django.db.models import F
-    with client_processing_lock(client.pk):
+    # Uploads serialize with other LAG writes and all reconciliation, but
+    # NOT with the long-running EDI file scan.
+    with lag_upload_lock(client.pk):
         schedule,_=FolderScanSchedule.objects.get_or_create(client=client)
+        result=_import_lag_unlocked(client,blob,filename,report_date,password,user,
+                                    reconcile=False)
+        # A scan may be indexing while this upload happens. Persist intent
+        # to reconcile, including for duplicate uploads.
         FolderScanSchedule.objects.filter(pk=schedule.pk).update(needs_reconcile=True)
-        result=_import_lag_unlocked(client,blob,filename,report_date,password,user)
-        # Duplicates also complete any interrupted reconciliation.
-        if result[1]:
-            reconcile_client(client)
-        FolderScanSchedule.objects.filter(pk=schedule.pk).update(needs_reconcile=False,revision=F('revision')+1)
+        # If the scan is idle, reconcile immediately; otherwise defer until
+        # the scanner finishes. Never block this HTTP request on the scan.
+        try:
+            with client_processing_lock(client.pk):
+                reconcile_client(client)
+                FolderScanSchedule.objects.filter(pk=schedule.pk).update(
+                    needs_reconcile=False, revision=F('revision')+1)
+        except ClientProcessingBusy:
+            pass
         return result
 
-def _import_lag_unlocked(client,blob,filename,report_date,password=None,user=None):
+def _import_lag_unlocked(client,blob,filename,report_date,password=None,user=None,reconcile=True):
     digest=hashlib.sha256(blob+str(report_date).encode('ascii')).hexdigest()
     existing=ImportBatch.objects.defer('original_file').filter(client=client,source='lag',fingerprint=digest,status='processed').first()
     if existing:return existing,True
@@ -111,7 +121,8 @@ def _import_lag_unlocked(client,blob,filename,report_date,password=None,user=Non
             LagClaimSnapshot.objects.create(client=client,batch=batch,claim=claim,row_number=record['row'],
                 sheet_name=record['sheet'],row_data={**record['raw'], '_snapshot': {k:record[k] for k in ('dcn','claim_number','fund','tpa','tpa_age','total_age','sheet')}})
         batch.processed_count=len(rows);batch.status='processed';batch.save(update_fields=['processed_count','status'])
-    reconcile_client(client)
+    if reconcile:
+        reconcile_client(client)
     return batch,False
 
 # Columns from observed fixed-width error report:

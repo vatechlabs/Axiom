@@ -29,3 +29,30 @@ def client_processing_lock(client_id):
             yield
         finally:
             lock.release()
+
+
+# Separate per-client lock for LAG writes and reconciliation. The EDI scan can
+# continue indexing while an upload holds this lock.
+_lag_locks = {}
+
+@contextmanager
+def lag_upload_lock(client_id, wait=False):
+    if connection.vendor == 'postgresql':
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT pg_advisory_lock(%s,%s)' if wait else 'SELECT pg_try_advisory_lock(%s,%s)', [764232,int(client_id)])
+            acquired = True if wait else cursor.fetchone()[0]
+        if not acquired:
+            raise ClientProcessingBusy('Another LAG upload or reconciliation is active. Retry shortly.')
+        try:
+            yield
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT pg_advisory_unlock(%s,%s)', [764232,int(client_id)])
+    else:
+        lock = _lag_locks.setdefault(client_id, Lock())
+        if not lock.acquire(blocking=wait):
+            raise ClientProcessingBusy('Another LAG upload or reconciliation is active. Retry shortly.')
+        try:
+            yield
+        finally:
+            lock.release()

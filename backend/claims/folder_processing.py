@@ -11,7 +11,7 @@ from .models import (Client, FolderScanSchedule, FolderScanRun, FolderScanItem,
 from .folder_paths import client_paths, allowed_roots
 from .rule_engine import rules_for, has_rules, rule_files, wgs_835_year_allowed, wgs_837_year_allowed
 from .importers import index_edi, import_errors, reconcile_client
-from .processing_locks import client_processing_lock, ClientProcessingBusy
+from .processing_locks import client_processing_lock, lag_upload_lock, ClientProcessingBusy
 from .smb_auth import connect_share
 
 
@@ -123,11 +123,14 @@ def perform_scan(run,schedule):
                     failed+=1
                     _item(run,kind,path,'failed',message=str(exc)[:3000])
                 FolderScanRun.objects.filter(pk=run.pk).update(processed=processed,skipped=skipped,deferred=deferred,failed=failed)
-    schedule.refresh_from_db()
-    if schedule.needs_reconcile:
-        FolderScanRun.objects.filter(pk=run.pk).update(message='Indexing complete. Refreshing claim links…')
-        reconcile_client(client)
-        FolderScanSchedule.objects.filter(pk=schedule.pk).update(needs_reconcile=False,revision=F('revision')+1)
+    # Reconciliation runs under the LAG lock so it cannot overlap claims import.
+    # Re-read the flag after taking the lock to include uploads during the scan.
+    with lag_upload_lock(client.pk, wait=True):
+        schedule.refresh_from_db()
+        if schedule.needs_reconcile:
+            FolderScanRun.objects.filter(pk=run.pk).update(message='Indexing complete. Refreshing claim links…')
+            reconcile_client(client)
+            FolderScanSchedule.objects.filter(pk=schedule.pk).update(needs_reconcile=False,revision=F('revision')+1)
     message=f'Processed {processed} new or changed files.' if processed else ('No files processed successfully.' if failed or deferred else 'No new files found.')
     if deferred:message+=f' {deferred} files deferred until transfer completes.'
     if failed:message+=f' {failed} files or folders failed; review results and use Run now to retry.'
