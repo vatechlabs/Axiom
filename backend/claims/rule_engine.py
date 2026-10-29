@@ -90,3 +90,41 @@ def rules_for(client,kind):
 
 def has_rules(client,kind):
     return FileSourceRule.objects.filter(client=client,file_type=kind).exists()
+
+
+def scan_rule_entries(rule):
+    """Yield filtered path and cached stat; avoid redundant SMB requests.
+
+    Only configured directories are traversed, never sibling folders. No symlinks.
+    Existing rule_files() remains unchanged for RECON.
+    """
+    import os
+    root=Path(rule.folder_path).resolve()
+    if not valid_root(root):
+        raise ValueError('Folder unavailable or outside approved roots: '+str(root))
+    included=[p.strip().replace('\\','/').strip('/') for p in rule.include_subfolders.split(',') if p.strip()]
+    excluded=[p.strip().replace('\\','/').strip('/').casefold() for p in rule.exclude_subfolders.split(',') if p.strip()]
+    target_dirs=[root]
+    for rel in included:
+        target=root.joinpath(*rel.split('/'))
+        if not target.resolve().is_relative_to(root):
+            raise ValueError('Included folder outside approved root')
+        if target.is_dir():target_dirs.append(target)
+    def enumerate_dir(directory, recursive):
+        with os.scandir(directory) as directory_entries:
+            entries=sorted(directory_entries,key=lambda e:e.name.casefold())
+        for entry in entries:
+            if entry.name.startswith('.') or entry.is_symlink():continue
+            path=Path(entry.path)
+            relative=path.relative_to(root).as_posix().casefold()
+            if any(relative==x or relative.startswith(x+'/') for x in excluded):continue
+            # Checking names before metadata saves expensive network round-trips.
+            if recursive and entry.is_dir(follow_symlinks=False):
+                yield from enumerate_dir(path,True)
+            elif match_file(rule,path) and entry.is_file(follow_symlinks=False):
+                yield path,entry.stat(follow_symlinks=False)
+    if rule.recursive:
+        yield from enumerate_dir(root,True)
+    else:
+        for directory in target_dirs:
+            yield from enumerate_dir(directory,directory!=root)
