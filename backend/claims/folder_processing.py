@@ -42,7 +42,7 @@ def perform_scan(run,schedule):
     roots=allowed_roots()
     processed=skipped=deferred=failed=0
     seen_files=set()
-    for key,kind in [('error_reports','error'),('835','835'),('837','837')]:
+    for key,kind in [('835','835'),('837','837'),('error_reports','error')]:
         if client.code.upper()=='WGS' and key in ('835','837'):
             try:
                 connect_share(client)
@@ -52,17 +52,27 @@ def perform_scan(run,schedule):
                 continue
         rules=rules_for(client,key) if has_rules(client,key) else [None]
         for rule in rules:
-            folder=Path(rule.folder_path if rule else paths[key]).resolve()
+            folder=Path(rule.folder_path if rule else paths[key])
             try:
+                folder=folder.resolve()
                 if rule:
-                    candidates=sorted(rule_files(rule))
+                    candidates=rule_files(rule)
                 else:
                     if not any(folder.is_relative_to(root) for root in roots) or not folder.is_dir():
                         raise ValueError('Folder missing, inaccessible, or outside approved roots')
-                    candidates=sorted(folder.rglob('*'))
+                    candidates=folder.rglob('*')
             except Exception as exc:
                 _item(run,kind,folder,'failed',message=str(exc));failed+=1;continue
-            for path in candidates:
+            def safe_candidates():
+                nonlocal failed
+                try:
+                    yield from candidates
+                except (OSError, ValueError) as exc:
+                    failed += 1
+                    _item(run,kind,folder,'failed',message=str(exc)[:3000])
+                    FolderScanRun.objects.filter(pk=run.pk).update(failed=failed)
+            FolderScanRun.objects.filter(pk=run.pk).update(message='Scanning '+kind+' files...')
+            for path in safe_candidates():
                 identity=(kind,str(path).casefold())
                 if identity in seen_files:continue
                 seen_files.add(identity)

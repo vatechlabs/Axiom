@@ -65,7 +65,16 @@ def rule_files(rule):
     if not root.is_dir():raise ValueError('Folder not accessible: '+str(root))
     include=[x.strip().replace('\\','/').casefold() for x in rule.include_subfolders.split(',') if x.strip()]
     exclude=[x.strip().replace('\\','/').casefold() for x in rule.exclude_subfolders.split(',') if x.strip()]
-    iterator=root.rglob('*') if rule.recursive or include else root.iterdir()
+    # Target selected subfolders; avoid walking the entire SMB tree.
+    if include and not rule.recursive:
+        folders=[root]
+        for relative in include:
+            sub=root.joinpath(*relative.split('/'))
+            if sub.is_dir() and sub.resolve().is_relative_to(root):
+                folders.append(sub)
+        iterator=(path for folder in folders for path in folder.rglob('*'))
+    else:
+        iterator=root.rglob('*') if rule.recursive else root.iterdir()
     for path in iterator:
         if path.is_symlink() or not path.is_file() or path.name.startswith('.'):continue
         parent=path.relative_to(root).parent.as_posix().casefold()
