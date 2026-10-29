@@ -131,6 +131,22 @@ def scan_recon_files(client):
                     duplicate=ReconFile.objects.filter(client=client,sub_client=sub_client,
                         fingerprint=digest,status='indexed').exclude(path=str(source)).first()
                     if duplicate:
+                        # Identical RECON CSV/PA7 moved into Archive: keep the
+                        # existing ReconRecord rows, but repair its file path.
+                        if not Path(duplicate.path).is_file():
+                            with transaction.atomic():
+                                occupied = ReconFile.objects.filter(
+                                    client=client, sub_client=sub_client,
+                                    path=str(source)
+                                ).exclude(pk=duplicate.pk).exists()
+                                if not occupied:
+                                    duplicate.path = str(source)
+                                    duplicate.filename = source.name
+                                    duplicate.size = stat.st_size
+                                    duplicate.modified_ns = stat.st_mtime_ns
+                                    duplicate.save(update_fields=[
+                                        'path', 'filename', 'size', 'modified_ns'
+                                    ])
                         continue
                     with transaction.atomic():
                         rf,_=ReconFile.objects.select_for_update().get_or_create(

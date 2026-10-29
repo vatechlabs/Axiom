@@ -145,7 +145,15 @@ def parse_error_txt(blob):
 def import_errors(client,path,reconcile=True):
     path=Path(path);blob=path.read_bytes();digest=hashlib.sha256(blob).hexdigest()
     old=ImportBatch.objects.filter(client=client,source='error',fingerprint=digest,status='processed').first()
-    if old:return old,True
+    if old:
+        # Same report moved into Archive: preserve the batch/observations but
+        # repair the stored source path once the old location disappears.
+        previous = Path(old.file_path) if old.file_path else None
+        if previous is None or not previous.is_file():
+            ImportBatch.objects.filter(pk=old.pk).update(file_path=str(path), filename=path.name[:255])
+            old.file_path = str(path)
+            old.filename = path.name[:255]
+        return old,True
     rows,report_date=parse_error_txt(blob)
     with transaction.atomic():
         batch=ImportBatch.objects.create(client=client,source='error',filename=path.name[:255],file_path=str(path),
@@ -280,6 +288,31 @@ def index_edi(client,path,kind,force=False):
     end=path.stat()
     if (before.st_size,before.st_mtime_ns)!=(end.st_size,end.st_mtime_ns):
         raise ValueError('EDI file changed during checksum; will retry next scan')
+    # A source file may move from out/ into out/backup hours later.
+    # Content SHA-256, not filename/path, identifies an unchanged EDI file.
+    # Keep one EdiFile + its claim indexes and repair the path if it moved.
+    duplicate = EdiFile.objects.filter(
+        client=client, kind=kind, fingerprint=digest.hexdigest()
+    ).exclude(path=str(path)).order_by('id').first()
+    if not force and duplicate:
+        previous = Path(duplicate.path)
+        if not previous.is_file():
+            with transaction.atomic():
+                # Do not overwrite another indexed record at the destination.
+                occupied = EdiFile.objects.filter(
+                    client=client, kind=kind, path=str(path)
+                ).exclude(pk=duplicate.pk).exists()
+                if not occupied:
+                    duplicate.path = str(path)
+                    duplicate.filename = path.name[:255]
+                    duplicate.bytes_size = end.st_size
+                    duplicate.modified_ns = end.st_mtime_ns
+                    duplicate.save(update_fields=[
+                        'path', 'filename', 'bytes_size', 'modified_ns'
+                    ])
+        # Existing EdiClaimIndex/EdiDocument relationships remain intact.
+        # A scan of an identical copy must never add another claim index.
+        return duplicate, True
     with transaction.atomic():
         obj,_=EdiFile.objects.update_or_create(client=client,kind=kind,path=str(path),defaults={
             'filename':path.name[:255],'fingerprint':digest.hexdigest(),'bytes_size':end.st_size,'modified_ns':end.st_mtime_ns})
