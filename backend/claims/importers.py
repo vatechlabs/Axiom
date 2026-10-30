@@ -113,6 +113,79 @@ def parse_lag(blob,password=None):
                          'fund':fund,'tpa_age':tpa_age,'total_age':total_age,'tpa':ident(get('tpa')),'raw':raw})
     return rows
 
+def parse_highmark_lag(blob, password=None):
+    """Read a verified Highmark SCCF/CAID workbook without using WGS sheet rules.
+
+    SCCF identifies the claim; CAID is retained as the secondary identifier.
+    Reject missing IDs or conflicting repeated SCCFs. Do not invent aging values:
+    blank/unavailable aging maps to 0 (the current claim model requires integers).
+    """
+    wb = workbook_from_bytes(blob, password)
+    rows = []
+    seen = {}
+    try:
+        for ws in wb.worksheets:
+            header_position = None
+            columns = None
+            for number, values in enumerate(ws.iter_rows(min_row=1, max_row=min(ws.max_row, 30), values_only=True), 1):
+                hdr = {canonical(value): index for index, value in enumerate(values) if value is not None}
+                if 'SCCF' in hdr and ('CAID' in hdr or 'SCCF DATE' in hdr):
+                    header_position = number
+                    columns = hdr
+                    break
+            if header_position is None:
+                continue
+
+            def pick(values, *names):
+                for name in names:
+                    at = columns.get(name)
+                    if at is not None and at < len(values) and values[at] is not None:
+                        return values[at]
+                return None
+
+            def identifier(value):
+                if value is None:
+                    return ''
+                if isinstance(value, float) and value.is_integer():
+                    return str(int(value))
+                return str(value).strip()
+
+            def aging(value, location):
+                if value is None or str(value).strip() == '':
+                    return 0
+                try:
+                    integer = int(float(value))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f'{location}: invalid aging value') from exc
+                if integer < 0:
+                    raise ValueError(f'{location}: negative aging value')
+                return integer
+
+            for row_number, values in enumerate(ws.iter_rows(min_row=header_position + 1, values_only=True), header_position + 1):
+                claim_id = identifier(pick(values, 'SCCF'))
+                caid = identifier(pick(values, 'CAID'))
+                if not claim_id and not caid:
+                    continue
+                if not claim_id:
+                    raise ValueError(f'{ws.title} row {row_number}: SCCF missing; refusing to guess the claim identifier')
+                if len(claim_id) > 80 or len(caid) > 80:
+                    raise ValueError(f'{ws.title} row {row_number}: claim identifier exceeds database limit')
+                if claim_id in seen and seen[claim_id] != caid:
+                    raise ValueError(f'{ws.title} row {row_number}: SCCF {claim_id} occurs with conflicting CAID values')
+                seen[claim_id] = caid
+                tpa_age = aging(pick(values, 'TPA AGE', 'TPA DAYS', 'AGE WITH TPA'), f'{ws.title} row {row_number}')
+                total_age = aging(pick(values, 'TOTAL AGE', 'OVERALL AGE', 'TOTAL DAYS'), f'{ws.title} row {row_number}')
+                raw = {f'col_{i+1}': v.isoformat() if isinstance(v, (date, datetime)) else str(v if v is not None else '') for i, v in enumerate(values)}
+                raw['_highmark_headers'] = {k: str(v) for k, v in columns.items()}
+                rows.append({'sheet': ws.title, 'row': row_number, 'dcn': caid,
+                             'claim_number': claim_id, 'fund': '', 'tpa': '',
+                             'tpa_age': tpa_age, 'total_age': total_age, 'raw': raw})
+        if not rows:
+            raise ValueError('Highmark workbook has no SCCF claim rows; nothing imported')
+        return rows
+    finally:
+        wb.close()
+
 def import_lag(client,blob,filename,report_date,password=None,user=None):
     from .processing_locks import client_processing_lock, lag_upload_lock, ClientProcessingBusy
     from .models import FolderScanSchedule
@@ -142,7 +215,8 @@ def _import_lag_unlocked(client,blob,filename,report_date,password=None,user=Non
     digest=hashlib.sha256(blob+str(report_date).encode('ascii')).hexdigest()
     existing=ImportBatch.objects.defer('original_file').filter(client=client,source='lag',fingerprint=digest,status='processed').first()
     if existing:return existing,True
-    rows=parse_lag(blob,password)
+    rows=(parse_highmark_lag(blob,password) if client.code.upper() in ('HIGHMARK','HMRK','HM')
+          else parse_lag(blob,password))
     with transaction.atomic():
         batch=ImportBatch.objects.create(client=client,source='lag',filename=filename[:255],report_date=report_date,
                                         original_file=blob,fingerprint=digest,created_by=user,status='processing')
