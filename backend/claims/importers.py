@@ -41,6 +41,39 @@ def workbook_from_bytes(blob,password=None):
         blob=out.getvalue()
     return load_workbook(io.BytesIO(blob),read_only=True,data_only=True)
 
+def validate_lag_client(client, blob, password=None):
+    """Reject a known client mismatch before duplicate checks or any database writes.
+
+    Deliberately do not infer a client from filename, fund, or claim identifiers.
+    Unknown workbook layouts are rejected for Highmark until its distinct SCCF
+    importer is implemented; otherwise a WGS workbook could corrupt its claims.
+    """
+    wb = workbook_from_bytes(blob, password)
+    try:
+        sheets = {canonical(s) for s in wb.sheetnames}
+        wgs_sheets = {canonical(s) for s in SHEETS}
+        # WGS-specific four-tab LAG layout, which the current parser expects.
+        is_wgs = wgs_sheets.issubset(sheets)
+        is_highmark = False
+        for ws in wb.worksheets[:5]:
+            for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 20), values_only=True):
+                headers = {canonical(v) for v in row if v is not None}
+                if 'SCCF' in headers and ('CAID' in headers or 'SCCF DATE' in headers):
+                    is_highmark = True
+                    break
+            if is_highmark:
+                break
+    finally:
+        wb.close()
+    code = client.code.upper()
+    if code in ('HIGHMARK', 'HMRK', 'HM'):
+        if is_wgs:
+            raise ValueError('Wrong LAG report: this is a WGS LAG report. Please select WGS, not Highmark.')
+        if not is_highmark:
+            raise ValueError('Highmark requires a Highmark LAG report with SCCF/CAID columns. This file could not be verified as Highmark.')
+    elif code == 'WGS' and is_highmark and not is_wgs:
+        raise ValueError('Wrong LAG report: this is a Highmark LAG report. Please select Highmark, not WGS.')
+
 def parse_lag(blob,password=None):
     wb=workbook_from_bytes(blob,password)
     found=[s for s in SHEETS if s in wb.sheetnames]
@@ -105,6 +138,7 @@ def import_lag(client,blob,filename,report_date,password=None,user=None):
         return result
 
 def _import_lag_unlocked(client,blob,filename,report_date,password=None,user=None,reconcile=True):
+    validate_lag_client(client, blob, password)
     digest=hashlib.sha256(blob+str(report_date).encode('ascii')).hexdigest()
     existing=ImportBatch.objects.defer('original_file').filter(client=client,source='lag',fingerprint=digest,status='processed').first()
     if existing:return existing,True
