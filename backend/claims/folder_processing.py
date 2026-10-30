@@ -13,6 +13,7 @@ from .rule_engine import rules_for, has_rules, rule_files, scan_rule_entries, wg
 from .importers import index_edi, import_errors, reconcile_client
 from .processing_locks import client_processing_lock, lag_upload_lock, ClientProcessingBusy
 from .smb_auth import connect_share
+from .highmark_837 import HIGHMARK_CODES, highmark_extensionless_837
 
 
 def queue_scan(client, trigger='manual'):
@@ -85,7 +86,9 @@ def perform_scan(run,schedule):
                     continue
                 if kind=='error' and suffix!='.txt':
                     continue
-                if kind!='error' and suffix not in ('.edi','.'+kind,'.txt'):
+                if (kind!='error' and suffix not in ('.edi','.'+kind,'.txt')
+                        and not (kind=='837' and client.code.upper() in HIGHMARK_CODES
+                                 and highmark_extensionless_837(path))):
                     continue
                 try:
                     if rule is None:

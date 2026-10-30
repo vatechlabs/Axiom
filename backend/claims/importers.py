@@ -7,6 +7,7 @@ from django.db import transaction
 from .models import (Claim,ImportBatch,LagClaimSnapshot,ErrorObservation,ErrorHistory,
                      EdiFile,EdiClaimIndex,EdiDocument)
 from openpyxl import load_workbook
+from .highmark_837 import HIGHMARK_CODES, highmark_837_refs
 
 SHEETS=('LOCAL CLMS','LOCAL ADJ','ITS CLMS','ITS ADJ')
 # Explicit per-column overrides for real workbook (not guessed from encrypted source).
@@ -322,7 +323,12 @@ def iter_edi_segments(path, chunk_size=1024*1024):
             raise ValueError('Incomplete trailing EDI segment: file may still be uploading')
 
 
-def edi_claim_refs(path, kind):
+def edi_claim_refs(path, kind, client_code=None):
+    # Highmark-only claim-level REF index. WGS and all other clients use the
+    # exact existing parser below; no cross-client change.
+    if kind == '837' and (client_code or '').upper() in HIGHMARK_CODES:
+        yield from highmark_837_refs(path, iter_edi_segments)
+        return
     with open(path, 'rb') as stream:
         isa = stream.read(106)
     if len(isa) != 106 or not isa.startswith(b'ISA'):
@@ -437,7 +443,7 @@ def index_edi(client,path,kind,force=False):
             'filename':path.name[:255],'fingerprint':digest.hexdigest(),'bytes_size':end.st_size,'modified_ns':end.st_mtime_ns})
         obj.claims_indexed.all().delete()
         pending=[]
-        for x,t,n,offset in edi_claim_refs(path,kind):
+        for x,t,n,offset in edi_claim_refs(path,kind,client.code):
             pending.append(EdiClaimIndex(edi_file=obj,claim_identifier=x,identifier_type=t,segment_number=n,start_byte=offset))
             if len(pending)>=1000:
                 EdiClaimIndex.objects.bulk_create(pending,batch_size=1000)
@@ -482,6 +488,21 @@ def reconcile_client(client):
     # of the current LAG. Each CLP/CLM occurrence is an individual selectable item.
     EdiDocument.objects.filter(claim__client=client).delete()
     linked=[]
+    # Highmark: only link an occurrence if all matching identifiers agree.
+    highmark_occurrence_claims={}
+    if client.code.upper() in HIGHMARK_CODES:
+        for idx in EdiClaimIndex.objects.filter(edi_file__client=client, edi_file__kind='837').iterator(chunk_size=1000):
+            ident=(idx.claim_identifier or '').strip().upper()
+            if idx.identifier_type == 'submitter':
+                candidates=by_id.get(ident, [])
+            elif idx.identifier_type in ('highmark_ref_f8', 'highmark_ref_d9', 'highmark_ref_9c'):
+                candidates=list({c.id:c for c in by_id.get(ident, []) + by_dcn.get(ident, [])}.values())
+            else:
+                continue
+            if candidates:
+                key=(idx.edi_file_id, idx.segment_number)
+                highmark_occurrence_claims.setdefault(key,set()).update(c.id for c in candidates)
+    seen_highmark_occurrences=set()
     for index in EdiClaimIndex.objects.filter(edi_file__client=client).select_related('edi_file').iterator(chunk_size=1000):
         identifier=(index.claim_identifier or '').strip().upper()
         matches=[]
@@ -495,11 +516,25 @@ def reconcile_client(client):
         elif (client.code == 'WGS' and index.edi_file.kind == '837'
               and index.identifier_type == 'wgs_ref_9c'):
             matches = by_id.get(identifier, [])
+        elif client.code.upper() in HIGHMARK_CODES and index.edi_file.kind == '837':
+            if index.identifier_type == 'submitter':
+                matches = by_id.get(identifier, [])
+            elif index.identifier_type in ('highmark_ref_f8', 'highmark_ref_d9', 'highmark_ref_9c'):
+                # SCCF is claim_number; CAID is dcn. Exact equality only.
+                # Never guess, strip digits, or join multiple candidate claims.
+                candidates = {c.id: c for c in by_id.get(identifier, []) + by_dcn.get(identifier, [])}
+                matches = list(candidates.values())
         elif index.identifier_type=='submitter':
             matches=by_id.get(identifier,[])
 
         if len(matches)!=1:
             continue
+        if client.code.upper() in HIGHMARK_CODES and index.edi_file.kind == '837':
+            key = (index.edi_file_id, index.segment_number)
+            if (key in seen_highmark_occurrences or
+                    highmark_occurrence_claims.get(key) != {matches[0].id}):
+                continue
+            seen_highmark_occurrences.add(key)
 
         linked.append(EdiDocument(claim=matches[0],edi_file=index.edi_file,edi_index=index,
                                   kind=index.edi_file.kind,original_name=index.edi_file.filename))

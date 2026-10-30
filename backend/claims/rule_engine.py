@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from django.conf import settings
 from .models import FileSourceRule
+from .highmark_837 import HIGHMARK_CODES, highmark_extensionless_837
 
 TYPES = ('error_reports','835','837','recon_abc','recon_musgrove','recon')
 DEFAULT_EXT = {'error_reports':'.txt','835':'.835,.edi,.txt','837':'.837,.edi,.txt','recon_abc':'.csv','recon_musgrove':'.csv','recon':'.pa7,.csv'}
@@ -47,6 +48,14 @@ def wgs_837_year_allowed(path):
 
 
 def match_file(rule, path):
+    if (rule.file_type == '837' and rule.client.code.upper() in HIGHMARK_CODES
+            and highmark_extensionless_837(path)):
+        # Apply configured prefix/suffix/subfolder constraints, but don't
+        # require an extension for the observed Highmark IPA files.
+        stem=path.stem.casefold()
+        prefixes=[x.strip().casefold() for x in rule.starts_with.split(',') if x.strip()]
+        suffixes=[x.strip().casefold() for x in rule.ends_with.split(',') if x.strip()]
+        return (not prefixes or any(stem.startswith(x) for x in prefixes)) and (not suffixes or any(stem.endswith(x) for x in suffixes))
     if rule.file_type == '837' and rule.client.code.upper() == 'WGS':
         if not wgs_837_year_allowed(path):
             return False
