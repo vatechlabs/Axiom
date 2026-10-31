@@ -66,7 +66,19 @@ def match_file(rule, path):
     prefixes=[x.strip().casefold() for x in rule.starts_with.split(',') if x.strip()]
     suffixes=[x.strip().casefold() for x in rule.ends_with.split(',') if x.strip()]
     exts=[x.strip().lower() for x in rule.extensions.split(',') if x.strip()]
-    return (not prefixes or any(stem.startswith(x) for x in prefixes)) and (not suffixes or any(stem.endswith(x) for x in suffixes)) and (not exts or path.suffix.lower() in exts)
+    # Highmark MIR filenames can end in variable transfer suffixes such as
+    # MIROUT.D261030.T150001 or MIROUT.D261028.T170001.
+    # Accept a trailing '*' wildcard ONLY for MIR extension rules; preserve
+    # exact-match semantics for 835, 837, RECON, and error-report sources.
+    if rule.file_type in ('mir_cpt', 'mir_sent', 'mir_received') and rule.client.code.upper() == 'HIGHMARK':
+        extension = path.suffix.casefold()
+        extension_matches = not exts or any(
+            (extension.startswith(ext[:-1]) if ext.endswith('*') else extension == ext)
+            for ext in exts
+        )
+    else:
+        extension_matches = not exts or path.suffix.lower() in exts
+    return (not prefixes or any(stem.startswith(x) for x in prefixes)) and (not suffixes or any(stem.endswith(x) for x in suffixes)) and extension_matches
 
 def rule_files(rule):
     root=Path(rule.folder_path).resolve()
