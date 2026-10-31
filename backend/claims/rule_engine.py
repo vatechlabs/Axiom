@@ -7,8 +7,8 @@ from django.conf import settings
 from .models import FileSourceRule
 from .highmark_837 import HIGHMARK_CODES, highmark_extensionless_837
 
-TYPES = ('error_reports','835','837','recon_abc','recon_musgrove','recon')
-DEFAULT_EXT = {'error_reports':'.txt','835':'.835,.edi,.txt','837':'.837,.edi,.txt','recon_abc':'.csv','recon_musgrove':'.csv','recon':'.pa7,.csv'}
+TYPES = ('error_reports','835','837','recon_abc','recon_musgrove','recon','mir_cpt','mir_sent','mir_received')
+DEFAULT_EXT = {'error_reports':'.txt','835':'.835,.edi,.txt','837':'.837,.edi,.txt','recon_abc':'.csv','recon_musgrove':'.csv','recon':'.pa7,.csv','mir_cpt':'.mir,.txt','mir_sent':'.mir,.txt','mir_received':'.mir,.txt'}
 
 def valid_root(path):
     resolved = Path(path).resolve()
