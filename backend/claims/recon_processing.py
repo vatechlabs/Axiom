@@ -13,7 +13,7 @@ from pathlib import Path
 
 from django.db import transaction
 from django.utils import timezone
-from .models import ClientFolderConfig, ReconFile, ReconRecord
+from .models import ClientFolderConfig, ReconFile, ReconRecord, FolderScanItem
 from .rule_engine import rules_for, has_rules, rule_files
 
 CSV_SUFFIXES={'.csv'}
@@ -73,12 +73,28 @@ def source_folders(client):
     return []
 
 
-def scan_recon_files(client):
-    """Poll each enabled RECON folder rule; preserve legacy source fallback."""
+def scan_recon_files(client, run=None):
+    """Scan RECON via the existing importer; optionally record a scheduled run.
+
+    AXIOM_RECON_SCHEDULE_V1: Reuse the existing validated CSV/PA7 readers,
+    duplicate handling and transactional record writes. No claim/EDI changes.
+    """
+    totals = {'processed': 0, 'skipped': 0, 'deferred': 0, 'failed': 0}
+    def result(kind, filename, status, count=0, message=''):
+        if status == 'indexed': totals['processed'] += 1
+        elif status == 'failed': totals['failed'] += 1
+        elif status == 'deferred': totals['deferred'] += 1
+        else: totals['skipped'] += 1
+        if run is not None and status != 'unchanged':
+            FolderScanItem.objects.create(run=run, kind=kind,
+                filename=filename.name[:255], path=str(filename), status=status,
+                indexed_count=count, message=message[:3000])
+    def recon_kind(folder_key):
+        return {'recon_abc':'rec_abc','recon_musgrove':'rec_mus','recon':'recon'}[folder_key]
     import os
     from django.conf import settings
     if not source_folders(client):
-        return
+        return totals
     approved=Path(settings.EDI_ROOT).resolve()
     now=timezone.now().timestamp()
     seen_paths=set()
@@ -89,7 +105,7 @@ def scan_recon_files(client):
                 try:
                     sources=sorted(rule_files(rule))
                 except (OSError,ValueError) as exc:
-                    print(f'RECON folder rule {rule.id}: {exc}',flush=True)
+                    result(recon_kind(folder_key),Path(rule.folder_path),'failed',message=str(exc))
                     continue
             else:
                 cfg=ClientFolderConfig.objects.filter(client=client).first()
@@ -100,6 +116,7 @@ def scan_recon_files(client):
                 folder=(Path(original) if os.name=='nt' and original
                         else approved/client.code/folder_key).resolve()
                 if not folder.is_dir():
+                    # Unconfigured optional folders are deliberately ignored.
                     continue
                 sources=sorted(folder.rglob('*'))
             for source in sources:
@@ -117,6 +134,7 @@ def scan_recon_files(client):
                         continue
                     stat=source.stat()
                     if now-stat.st_mtime<60:
+                        result(recon_kind(folder_key),source,'deferred',message='File is still settling (<60 seconds).')
                         continue
                     current=ReconFile.objects.filter(client=client,sub_client=sub_client,path=str(source)).first()
                     if stat.st_size == 0:
@@ -133,14 +151,17 @@ def scan_recon_files(client):
                                     'modified_ns': stat.st_mtime_ns,
                                 },
                             )
+                        result(recon_kind(folder_key),source,'unchanged')
                         continue
                     if current and current.status=='indexed' and current.size==stat.st_size and current.modified_ns==stat.st_mtime_ns:
+                        result(recon_kind(folder_key),source,'unchanged')
                         continue
                     payload=list(parse_records(source))
                     if len(payload)>300000:
                         raise ValueError('File exceeds 300,000 rows; split before importing.')
                     after=source.stat()
                     if (stat.st_size,stat.st_mtime_ns)!=(after.st_size,after.st_mtime_ns):
+                        result(recon_kind(folder_key),source,'deferred',message='File changed during scan; retry next run.')
                         continue
                     digest=hashlib.sha256(source.read_bytes()).hexdigest()
                     duplicate=ReconFile.objects.filter(client=client,sub_client=sub_client,
@@ -162,6 +183,7 @@ def scan_recon_files(client):
                                     duplicate.save(update_fields=[
                                         'path', 'filename', 'size', 'modified_ns'
                                     ])
+                        result(recon_kind(folder_key),source,'unchanged')
                         continue
                     with transaction.atomic():
                         rf,_=ReconFile.objects.select_for_update().get_or_create(
@@ -182,6 +204,9 @@ def scan_recon_files(client):
                                 ReconRecord(source=rf,row_number=n,claim_number=claim,claim_date=date,raw_data=raw)
                                 for n,claim,date,raw in payload[start:start+1000]
                             ],batch_size=1000)
+                    result(recon_kind(folder_key),source,'indexed',count=len(payload))
                 except Exception as exc:
                     ReconFile.objects.update_or_create(client=client,sub_client=sub_client,path=str(source),defaults={
                         'filename':source.name,'status':'failed','error':str(exc)[:1500]})
+                    result(recon_kind(folder_key),source,'failed',message=str(exc))
+    return totals

@@ -23,8 +23,13 @@ class Command(BaseCommand):
                     if ran:self.stdout.write(f'Finished scan attempt for {client.code}')
                 except Exception as exc:
                     self.stderr.write(f'{client.code}: {exc}')
-            # RECON must also work for clients with no LAG scan schedule.
+            # AXIOM_RECON_SCHEDULE_V1: Scheduled clients scan RECON inside
+            # perform_scan(), so never poll them independently between runs.
+            # Preserve legacy RECON polling only for clients with no enabled schedule.
             for client in Client.objects.filter(models.Q(folder_config__isnull=False) | models.Q(file_source_rules__isnull=False)).distinct().order_by('id'):
+                schedule=FolderScanSchedule.objects.filter(client=client).first()
+                if schedule and schedule.enabled:
+                    continue
                 try:
                     scan_recon_files(client)
                 except Exception as exc:

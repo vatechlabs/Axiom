@@ -13,6 +13,7 @@ from .rule_engine import rules_for, has_rules, rule_files, scan_rule_entries, wg
 from .importers import index_edi, import_errors, reconcile_client
 from .processing_locks import client_processing_lock, lag_upload_lock, ClientProcessingBusy
 from .smb_auth import connect_share
+from .recon_processing import scan_recon_files  # AXIOM_RECON_SCHEDULE_V1
 from .highmark_837 import HIGHMARK_CODES, highmark_extensionless_837
 
 
@@ -130,6 +131,20 @@ def perform_scan(run,schedule):
                     failed+=1
                     _item(run,kind,path,'failed',message=str(exc)[:3000])
                 FolderScanRun.objects.filter(pk=run.pk).update(processed=processed,skipped=skipped,deferred=deferred,failed=failed)
+    # RECON ingestion is independent of claims/EDI and uses the existing
+    # client-specific CSV/PA7 importer. Scan once as part of this scheduled/manual
+    # run, not via a second timer. Failures are visible in Processing History.
+    try:
+        recon = scan_recon_files(client, run=run)
+        processed += recon['processed']
+        skipped += recon['skipped']
+        deferred += recon['deferred']
+        failed += recon['failed']
+    except Exception as exc:
+        failed += 1
+        _item(run,'recon',Path('RECON'), 'failed', message=str(exc)[:3000])
+    FolderScanRun.objects.filter(pk=run.pk).update(
+        processed=processed, skipped=skipped, deferred=deferred, failed=failed)
     # Reconciliation runs under the LAG lock so it cannot overlap claims import.
     # Re-read the flag after taking the lock to include uploads during the scan.
     with lag_upload_lock(client.pk, wait=True):
