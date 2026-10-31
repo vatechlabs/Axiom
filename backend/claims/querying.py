@@ -117,8 +117,8 @@ def rows_for(queryset, report_date):
     return [dict(id=s.claim_id, claim_number=s.s_number, claim_submitter_id=s.s_number,
                  dcn=s.s_dcn, fund=s.s_fund, tpa=s.s_tpa, tpa_age=s.s_tpa_age,
                  total_age=s.s_total_age, error_message=s.s_error,
-                 source_sheet=s.sheet_name, report_date=str(s.batch.report_date) if (s.row_data or {}).get('_highmark_type') else str(report_date),
-                 report_type=(s.row_data or {}).get('_highmark_type',''),
+                 source_sheet=s.sheet_name, report_date=str(s.batch.report_date),
+                 report_type=((s.row_data or {}).get('_highmark_type') or (s.batch.report_type if s.batch.report_type else s.sheet_name)),
                  amount=str((s.row_data or {}).get('col_15') or '0'),
                  edi_835_count=counts.get((s.claim_id,'835'),0),
                  edi_837_count=counts.get((s.claim_id,'837'),0)) for s in snapshots]
