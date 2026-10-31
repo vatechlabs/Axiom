@@ -15,7 +15,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from .models import Claim,ClaimNote,ErrorHistory,EdiDocument,ImportBatch,Membership,ClientFolderConfig
 from .serializers import ClientSerializer,ClaimSerializer,ClaimDetailSerializer,ClaimNoteSerializer
-from .querying import snapshot_query, filter_query, rows_for
+from .querying import snapshot_query, highmark_snapshot_query, filter_query, rows_for
 from .permissions import allowed_client,can_edit
 from .app_roles import role_name,is_demo,is_operator
 from .importers import import_lag,parse_lag
@@ -71,6 +71,17 @@ def snapshot_values(snapshot, report_date):
          'source_sheet':snapshot.sheet_name,'report_date':str(report_date),
          'amount':str(raw.get('col_15') or '0')}
 
+def is_highmark(client):
+ return client.code.upper() in ('HIGHMARK','HMRK','HM')
+
+def active_rows(request,client,batch):
+ if is_highmark(client):
+  raw=request.query_params.get('lag_date','')
+  try: asof=date.fromisoformat(raw) if raw else None
+  except ValueError:raise ValueError('lag_date must be YYYY-MM-DD')
+  return highmark_snapshot_query(client,asof)
+ return snapshot_query(client,batch)
+
 def lag_batches(client):
  return ImportBatch.objects.defer('original_file').filter(client=client,source='lag',status='processed',report_date__isnull=False).order_by('-report_date','-created_at','-id')
 
@@ -85,7 +96,7 @@ def selected_batch(request,client):
 
 def snapshot_rows(request,client,batch):
  if not batch:return []
- return rows_for(filter_query(snapshot_query(client,batch),request.query_params),batch.report_date)
+ return rows_for(filter_query(active_rows(request,client,batch),request.query_params),batch.report_date)
 
 @api_view(['GET'])
 def lag_dates(request):
@@ -100,7 +111,7 @@ def claims(request):
  client=allowed_client(request)
  try:batch=selected_batch(request,client)
  except ValueError as e:return Response({'detail':str(e)},status=400)
- qs=filter_query(snapshot_query(client,batch),request.query_params) if batch else None
+ qs=filter_query(active_rows(request,client,batch),request.query_params) if batch else None
  try:
   page=int(request.query_params.get('page','1'))
   page_size=int(request.query_params.get('page_size','100'))
@@ -118,7 +129,7 @@ def dashboard(request):
  except ValueError as e:return Response({'detail':str(e)},status=400)
  if not batch:
   return Response({'lag_date':None,'lag_batch_id':None,'total':0,'over_60':0,'with_errors':0,'top_errors':[],'fund_counts':[],'filter_options':{'funds':[],'errors':[]},'attention':[]})
- base=snapshot_query(client,batch)
+ base=active_rows(request,client,batch)
  qs=filter_query(base,request.query_params)
  totals=qs.aggregate(total=Count('id'),over_60=Count('id',filter=Q(s_total_age__gt=60)),with_errors=Count('id',filter=~Q(s_error='')))
  funds=list(qs.order_by().exclude(s_fund='').values('s_fund').annotate(n=Count('id')).order_by('-n','s_fund'))
@@ -239,7 +250,31 @@ def upload_lag(request):
   import logging
   logging.getLogger(__name__).exception('LAG import error')
   return Response({'detail':'Import failed. See server logs.'},status=500)
- return Response({'processed':batch.processed_count,'duplicate':duplicate,'batch_id':batch.pk,'report_date':str(batch.report_date),'detail':'LAG report indexed.'},status=200 if duplicate else 201)
+ return Response({'processed':batch.processed_count,'duplicate':duplicate,'batch_id':batch.pk,'report_date':str(batch.report_date),'detail':('Duplicate Highmark LAG report: already uploaded; no records changed.' if duplicate and is_highmark(client) else 'LAG report indexed.')},status=200 if duplicate else 201)
+
+@api_view(['GET','PUT'])
+def highmark_fund_settings(request):
+ client=allowed_client(request)
+ if not is_highmark(client):return Response({'detail':'Highmark only'},status=404)
+ from .models import HighmarkFundMap
+ from .importers import DEFAULT_HM_FUNDS
+ current=list(HighmarkFundMap.objects.filter(client=client).values('prefix','fund').order_by('prefix'))
+ if request.method=='GET':
+  return Response({'mappings':current or [{'prefix':p,'fund':v} for p,v in DEFAULT_HM_FUNDS.items()], 'editable':is_operator(request.user)})
+ if not is_operator(request.user):return Response({'detail':'Only administrators may edit mappings'},status=403)
+ data=request.data.get('mappings')
+ if not isinstance(data,list) or len(data)>100:return Response({'detail':'Provide up to 100 mappings'},status=400)
+ seen=set();clean=[]
+ for row in data:
+  if not isinstance(row,dict):return Response({'detail':'Invalid mapping'},status=400)
+  prefix=str(row.get('prefix','')).strip().upper();fund=str(row.get('fund','')).strip()
+  if not prefix.isalnum() or len(prefix)>12 or not fund or len(fund)>100 or prefix in seen:
+   return Response({'detail':'Invalid or duplicate prefix/fund mapping'},status=400)
+  seen.add(prefix);clean.append((prefix,fund))
+ with transaction.atomic():
+  HighmarkFundMap.objects.filter(client=client).delete()
+  HighmarkFundMap.objects.bulk_create([HighmarkFundMap(client=client,prefix=p,fund=f) for p,f in clean])
+ return Response({'mappings':[{'prefix':p,'fund':f} for p,f in clean]})
 
 @api_view(['GET', 'PUT'])
 def folder_settings(request):

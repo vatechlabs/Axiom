@@ -27,6 +27,14 @@ class ClientFolderConfig(models.Model):
     def __str__(self):
         return f'{self.client.code} folder configuration'
 
+class HighmarkFundMap(models.Model):
+    client=models.ForeignKey(Client,on_delete=models.CASCADE)
+    prefix=models.CharField(max_length=12)
+    fund=models.CharField(max_length=100)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['client','prefix'],name='uniq_hm_fund_prefix')]
+
+
 class Membership(models.Model):
     user=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE,related_name='client_memberships')
     client=models.ForeignKey(Client,on_delete=models.CASCADE,related_name='members')
@@ -45,6 +53,8 @@ class ImportBatch(models.Model):
     created_at=models.DateTimeField(default=timezone.now)
     processed_count=models.PositiveIntegerField(default=0)
     status=models.CharField(max_length=30,default='processing')
+    report_type=models.CharField(max_length=32,default='',blank=True)
+    content_sha256=models.CharField(max_length=64,default='',blank=True,db_index=True)
     error=models.TextField(blank=True)
     class Meta: constraints=[models.UniqueConstraint(fields=['client','source','fingerprint'],condition=~models.Q(fingerprint=''),name='unique_source_fingerprint')]
 

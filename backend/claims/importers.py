@@ -114,7 +114,31 @@ def parse_lag(blob,password=None):
                          'fund':fund,'tpa_age':tpa_age,'total_age':total_age,'tpa':ident(get('tpa')),'raw':raw})
     return rows
 
-def parse_highmark_lag(blob, password=None):
+HIGHMARK_CODES_LAG = ('HIGHMARK','HMRK','HM')
+DEFAULT_HM_FUNDS = {'J7':'L152','J6':'OEW','J5':'CPT','T5':'AMO'}
+
+def highmark_type(filename, columns):
+    name = filename.upper()
+    headers = set(columns)
+    if 'ADJUSTMENT DATE' in headers or 'ADJUST' in name:
+        return 'Adjustments'
+    if 'ABC BLUECARD' in name or ('STATUS' in headers and 'BLUECARD' in name):
+        return 'ABC BlueCard'
+    if 'INVENTORY' in name:
+        return 'Inventory'
+    return 'Daily Lag'
+
+def highmark_map(client):
+    from .models import HighmarkFundMap
+    rows = list(HighmarkFundMap.objects.filter(client=client).values_list('prefix','fund'))
+    return {p.upper(): f for p,f in rows}
+
+def highmark_fund(caid, mapping):
+    caid=(caid or '').upper().strip()
+    matches=[(len(p),f) for p,f in mapping.items() if p and caid.startswith(p)]
+    return max(matches)[1] if matches else 'Not Found'
+
+def parse_highmark_lag(blob, password=None, client=None, filename=""):
     """Read a verified Highmark SCCF/CAID workbook without using WGS sheet rules.
 
     SCCF identifies the claim; CAID is retained as the secondary identifier.
@@ -124,6 +148,7 @@ def parse_highmark_lag(blob, password=None):
     wb = workbook_from_bytes(blob, password)
     rows = []
     seen = {}
+    mapping = highmark_map(client) if client is not None else DEFAULT_HM_FUNDS.copy()
     try:
         for ws in wb.worksheets:
             header_position = None
@@ -174,12 +199,14 @@ def parse_highmark_lag(blob, password=None):
                 if claim_id in seen and seen[claim_id] != caid:
                     raise ValueError(f'{ws.title} row {row_number}: SCCF {claim_id} occurs with conflicting CAID values')
                 seen[claim_id] = caid
-                tpa_age = aging(pick(values, 'TPA AGE', 'TPA DAYS', 'AGE WITH TPA'), f'{ws.title} row {row_number}')
+                tpa_age = aging(pick(values, 'TPA AGE', 'TPA DAYS', 'AGE WITH TPA', 'AGE'), f'{ws.title} row {row_number}')
                 total_age = aging(pick(values, 'TOTAL AGE', 'OVERALL AGE', 'TOTAL DAYS'), f'{ws.title} row {row_number}')
                 raw = {f'col_{i+1}': v.isoformat() if isinstance(v, (date, datetime)) else str(v if v is not None else '') for i, v in enumerate(values)}
                 raw['_highmark_headers'] = {k: str(v) for k, v in columns.items()}
+                raw['_highmark_type'] = highmark_type(filename, columns)
+                raw['_source_dates'] = {k: (v.isoformat() if isinstance(v, (date,datetime)) else str(v) if v is not None else '') for k in ('SCCF DATE','RECEIPT DATE','ADJUSTMENT DATE') if (v := pick(values,k)) is not None}
                 rows.append({'sheet': ws.title, 'row': row_number, 'dcn': caid,
-                             'claim_number': claim_id, 'fund': '', 'tpa': '',
+                             'claim_number': claim_id, 'fund': highmark_fund(caid,mapping), 'tpa': '',
                              'tpa_age': tpa_age, 'total_age': total_age, 'raw': raw})
         if not rows:
             raise ValueError('Highmark workbook has no SCCF claim rows; nothing imported')
@@ -213,14 +240,20 @@ def import_lag(client,blob,filename,report_date,password=None,user=None):
 
 def _import_lag_unlocked(client,blob,filename,report_date,password=None,user=None,reconcile=True):
     validate_lag_client(client, blob, password)
+    hm=client.code.upper() in HIGHMARK_CODES_LAG
+    raw_sha=hashlib.sha256(blob).hexdigest() if hm else ''
+    if hm:
+        already=ImportBatch.objects.defer('original_file').filter(client=client,source='lag',status='processed',content_sha256=raw_sha).first()
+        if already:return already,True
     digest=hashlib.sha256(blob+str(report_date).encode('ascii')).hexdigest()
     existing=ImportBatch.objects.defer('original_file').filter(client=client,source='lag',fingerprint=digest,status='processed').first()
     if existing:return existing,True
-    rows=(parse_highmark_lag(blob,password) if client.code.upper() in ('HIGHMARK','HMRK','HM')
+    rows=(parse_highmark_lag(blob,password,client,filename) if hm
           else parse_lag(blob,password))
     with transaction.atomic():
         batch=ImportBatch.objects.create(client=client,source='lag',filename=filename[:255],report_date=report_date,
-                                        original_file=blob,fingerprint=digest,created_by=user,status='processing')
+                                        original_file=blob,fingerprint=digest,created_by=user,status='processing',
+                                        content_sha256=raw_sha,report_type=(rows[0]['raw'].get('_highmark_type','') if hm else ''))
         for record in rows:
             key=record['claim_number']
             claim,_=Claim.objects.update_or_create(client=client,claim_number=key,

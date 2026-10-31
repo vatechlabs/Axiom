@@ -31,6 +31,45 @@ def snapshot_query(client, batch):
     )
 
 
+def highmark_snapshot_query(client, selected_date=None):
+    """Latest batch per fund+report type, never merge WGS selection semantics."""
+    from .models import ImportBatch
+    from datetime import date
+    from django.db.models import Max
+    batches=ImportBatch.objects.filter(client=client,source='lag',status='processed')
+    if selected_date:
+        batches=batches.filter(report_date__lte=selected_date)
+    batch_ids=list(batches.order_by('-report_date','-created_at','-id').values_list('id',flat=True))
+    if not batch_ids:return LagClaimSnapshot.objects.none()
+    all_rows=LagClaimSnapshot.objects.filter(client=client,batch_id__in=batch_ids).select_related('batch').order_by('-batch__report_date','-batch__created_at','-batch_id','id')
+    # Fund and report type identified on each snapshot at upload time. This
+    # prevents one adjustment batch from replacing an inventory batch.
+    latest={}
+    for s in all_rows.only('id','batch_id','row_data','batch__report_type','batch__report_date').iterator(chunk_size=2000):
+        meta=(s.row_data or {}).get('_snapshot') or {}
+        fund=meta.get('fund','Not Found')
+        typ=s.batch.report_type or (s.row_data or {}).get('_highmark_type') or 'Daily Lag'
+        key=(fund,typ)
+        if key not in latest: latest[key]=s.batch_id
+    allowed=set(latest.values())
+    # A batch may contain multiple funds. Select only snapshots associated
+    # with the winning (fund, report_type) pair.
+    accepted=[]
+    for s in all_rows.only('id','batch_id','row_data','batch__report_type').iterator(chunk_size=2000):
+        meta=(s.row_data or {}).get('_snapshot') or {}
+        key=(meta.get('fund','Not Found'),s.batch.report_type or (s.row_data or {}).get('_highmark_type') or 'Daily Lag')
+        if latest.get(key)==s.batch_id:accepted.append(s.id)
+    base=LagClaimSnapshot.objects.filter(client=client,id__in=accepted).select_related('batch').annotate(
+        s_number=snapshot_text('claim_number','col_2'),
+        s_dcn=snapshot_text('dcn'),s_fund=snapshot_text('fund','col_9'),
+        s_tpa=snapshot_text('tpa'),
+        s_tpa_age=Cast(Cast(Coalesce(NullIf(snapshot_text('tpa_age','col_5'),Value('')),Value('0')),FloatField()),IntegerField()),
+        s_total_age=Cast(Cast(Coalesce(NullIf(snapshot_text('total_age','col_1'),Value('')),Value('0')),FloatField()),IntegerField()),
+    ).exclude(s_number='')
+    latest_errors=ErrorHistory.objects.filter(claim_id=OuterRef('claim_id'))
+    if selected_date:latest_errors=latest_errors.filter(report_date__lte=selected_date)
+    return base.annotate(s_error=Coalesce(Subquery(latest_errors.order_by('-report_date','-id').values('message')[:1]),Value(''),output_field=TextField()))
+
 def filter_query(qs, params):
     def many(key):
         if hasattr(params, 'getlist'):
@@ -78,7 +117,8 @@ def rows_for(queryset, report_date):
     return [dict(id=s.claim_id, claim_number=s.s_number, claim_submitter_id=s.s_number,
                  dcn=s.s_dcn, fund=s.s_fund, tpa=s.s_tpa, tpa_age=s.s_tpa_age,
                  total_age=s.s_total_age, error_message=s.s_error,
-                 source_sheet=s.sheet_name, report_date=str(report_date),
+                 source_sheet=s.sheet_name, report_date=str(s.batch.report_date) if (s.row_data or {}).get('_highmark_type') else str(report_date),
+                 report_type=(s.row_data or {}).get('_highmark_type',''),
                  amount=str((s.row_data or {}).get('col_15') or '0'),
                  edi_835_count=counts.get((s.claim_id,'835'),0),
                  edi_837_count=counts.get((s.claim_id,'837'),0)) for s in snapshots]
