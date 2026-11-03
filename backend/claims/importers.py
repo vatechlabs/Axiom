@@ -1,4 +1,5 @@
 """File readers and per-client reconciliation. Never confuse source date with import date."""
+from .x12_header import read_isa
 import hashlib, io, json, os, re
 from datetime import date,datetime
 from pathlib import Path
@@ -326,13 +327,11 @@ def iter_edi_segments(path, chunk_size=1024*1024):
     so a selected claim can later be retrieved using a seek against the remote file.
     """
     with open(path, 'rb') as stream:
-        isa = stream.read(106)
-        if len(isa) != 106 or not isa.startswith(b'ISA'):
-            raise ValueError('Not a valid ISA envelope')
+        isa, isa_start = read_isa(stream)
         sep = bytes([isa[105]])
-        stream.seek(0)
+        stream.seek(isa_start)
         pending = b''
-        offset = 0
+        offset = isa_start
         number = 0
         while True:
             chunk = stream.read(chunk_size)
@@ -363,9 +362,7 @@ def edi_claim_refs(path, kind, client_code=None):
         yield from highmark_837_refs(path, iter_edi_segments)
         return
     with open(path, 'rb') as stream:
-        isa = stream.read(106)
-    if len(isa) != 106 or not isa.startswith(b'ISA'):
-        raise ValueError('Not an X12 interchange')
+        isa, isa_start = read_isa(stream)
     element = chr(isa[3])
     claim_position = None
     claim_level = False
@@ -410,11 +407,10 @@ def parse_edi_claims(blob, kind):
     import tempfile
     with tempfile.TemporaryFile() as stream:
         stream.write(blob)
-        stream.seek(0)
-        # Existing callers only need claim ID, identifier type and segment ordinal.
-        if len(blob)<106 or not blob.startswith(b'ISA'):
-            raise ValueError('Not an X12 interchange')
-        element=chr(blob[3]);separator=bytes([blob[105]])
+        header, isa_start = read_isa(stream)
+        element = chr(header[3])
+        separator = bytes([header[105]])
+        blob = blob[isa_start:]
         result=[]
         for number,segment in enumerate(blob.split(separator)):
             fields=segment.decode('latin-1').strip().split(element)

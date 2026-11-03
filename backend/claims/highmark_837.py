@@ -3,6 +3,7 @@
 Only claim-level REF*F8 / REF*D9 / REF*9C values are indexed.
 All identifiers retain their parent's CLM position for claim excerpt extraction.
 """
+from .x12_header import read_isa
 from pathlib import Path
 import re
 
@@ -17,9 +18,7 @@ def highmark_extensionless_837(path):
 def highmark_837_refs(path, segment_iterator):
     """Yield (identifier, type, CLM segment number, CLM byte offset)."""
     with open(path, 'rb') as stream:
-        isa = stream.read(106)
-    if len(isa) != 106 or not isa.startswith(b'ISA'):
-        raise ValueError('Not an X12 interchange')
+        isa, _ = read_isa(stream)
     element = chr(isa[3])
     position = None
     claim_level = False

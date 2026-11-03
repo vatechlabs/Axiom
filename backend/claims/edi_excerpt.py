@@ -1,13 +1,12 @@
 """Seek-based, bounded claim-specific EDI excerpt from local/UNC paths."""
+from .x12_header import read_isa
 
 def extract_claim_excerpt(path, index, kind, max_bytes=1024*1024):
     if index.start_byte is None:
         raise ValueError('Reindex legacy EDI source to obtain claim offset')
     marker=b'CLP' if kind=='835' else b'CLM'
     with open(path,'rb') as stream:
-        header=stream.read(106)
-        if len(header)<106 or not header.startswith(b'ISA'):
-            raise ValueError('Invalid ISA envelope')
+        header, _ = read_isa(stream)
         sep=bytes([header[105]])
         elem=bytes([header[3]])
         stream.seek(index.start_byte)
@@ -44,11 +43,9 @@ def extract_transaction(path, index, kind, max_bytes=2*1024*1024):
         raise ValueError('Reindex source to obtain claim offset')
     marker = b'CLP' if kind == '835' else b'CLM'
     with open(path, 'rb') as stream:
-        header = stream.read(106)
-        if len(header) < 106 or not header.startswith(b'ISA'):
-            raise ValueError('Invalid ISA envelope')
+        header, isa_start = read_isa(stream)
         sep, elem = bytes([header[105]]), bytes([header[3]])
-        stream.seek(0)
+        stream.seek(isa_start)
         pending = b''
         absolute = 0
         transaction = None
