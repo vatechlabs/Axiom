@@ -572,3 +572,7 @@ def reconcile_client(client):
             linked=[]
     if linked:
         EdiDocument.objects.bulk_create(linked,batch_size=1000)
+
+
+    from .mir_processing import relink_mir
+    relink_mir(client)

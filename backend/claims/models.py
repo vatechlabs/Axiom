@@ -252,3 +252,31 @@ class SmbCredential(models.Model):
     username=models.CharField(max_length=255)
     password_ciphertext=models.BinaryField()
     updated_at=models.DateTimeField(auto_now=True)
+
+
+
+class MirFile(models.Model):
+    client = models.ForeignKey(Client, on_delete=models.CASCADE)
+    source_type = models.CharField(max_length=20)
+    sub_client = models.CharField(max_length=3)
+    path = models.TextField()
+    path_hash = models.CharField(max_length=64)
+    filename = models.CharField(max_length=255)
+    fingerprint = models.CharField(max_length=64)
+    source_date = models.DateField()
+    indexed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['client', 'source_type', 'path_hash'], name='unique_mir_source')]
+
+
+class MirRecord(models.Model):
+    source = models.ForeignKey(MirFile, on_delete=models.CASCADE, related_name='records')
+    claim = models.ForeignKey(Claim, null=True, blank=True, on_delete=models.SET_NULL, related_name='mir_records')
+    row_number = models.PositiveIntegerField()
+    claim_identifier = models.CharField(max_length=80, db_index=True)
+    error_text = models.TextField(blank=True)
+    raw_line = models.TextField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['source', 'row_number'], name='unique_mir_row')]

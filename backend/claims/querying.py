@@ -3,7 +3,7 @@ from django.db.models import Q, F, Value, OuterRef, Subquery, TextField, Integer
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce, NullIf, Cast
 from rest_framework.exceptions import ValidationError
-from .models import LagClaimSnapshot, ErrorHistory, EdiDocument
+from .models import LagClaimSnapshot, ErrorHistory, EdiDocument, MirRecord
 
 
 def snapshot_text(key, fallback=None):
@@ -68,7 +68,13 @@ def highmark_snapshot_query(client, selected_date=None):
     ).exclude(s_number='')
     latest_errors=ErrorHistory.objects.filter(claim_id=OuterRef('claim_id'))
     if selected_date:latest_errors=latest_errors.filter(report_date__lte=selected_date)
-    return base.annotate(s_error=Coalesce(Subquery(latest_errors.order_by('-report_date','-id').values('message')[:1]),Value(''),output_field=TextField()))
+    mir_errors = MirRecord.objects.filter(claim_id=OuterRef('claim_id'), source__source_type='mir_received')
+    if selected_date:
+        mir_errors = mir_errors.filter(source__source_date__lte=selected_date)
+    return base.annotate(s_error=Coalesce(
+        Subquery(mir_errors.order_by('-source__source_date', '-id').values('error_text')[:1]),
+        Subquery(latest_errors.order_by('-report_date','-id').values('message')[:1]),
+        Value(''), output_field=TextField()))
 
 def filter_query(qs, params):
     def many(key):
@@ -108,14 +114,15 @@ def filter_query(qs, params):
 
 
 def rows_for(queryset, report_date):
-    snapshots = list(queryset)
+    snapshots = list(queryset.select_related('batch').defer('batch__original_file'))
     ids = [s.claim_id for s in snapshots]
     counts = {}
+    mir_counts = dict(MirRecord.objects.filter(claim_id__in=ids).values('claim_id').annotate(n=Count('id')).values_list('claim_id','n'))
     if ids:
         for item in EdiDocument.objects.filter(claim_id__in=ids).order_by().values('claim_id', 'kind').annotate(n=Count('id')):
             counts[(item['claim_id'], item['kind'])] = item['n']
     return [dict(id=s.claim_id, claim_number=s.s_number, claim_submitter_id=s.s_number,
-                 dcn=s.s_dcn, fund=s.s_fund, tpa=s.s_tpa, tpa_age=s.s_tpa_age,
+                 mir_count=mir_counts.get(s.claim_id,0), dcn=s.s_dcn, fund=s.s_fund, tpa=s.s_tpa, tpa_age=s.s_tpa_age,
                  total_age=s.s_total_age, error_message=s.s_error,
                  source_sheet=s.sheet_name, report_date=str(s.batch.report_date),
                  report_type=((s.row_data or {}).get('_highmark_type') or (s.batch.report_type if s.batch.report_type else s.sheet_name)),
