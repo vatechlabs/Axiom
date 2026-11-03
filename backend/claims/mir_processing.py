@@ -16,6 +16,11 @@ from .smb_auth import connect_for_edi_path
 def parse_mir(blob, received):
     """Positions are one-based bytes: identifier 3–19, returned errors 208–217."""
     prefix = b'MI' if received else b'MO'
+    # Legacy Windows exports may end with a DOS EOF byte after the last row.
+    # Strip only a terminal marker; an embedded marker remains a parse error.
+    tail = blob.rstrip(b'\r\n')
+    if tail.endswith(b'\x1a'):
+        blob = tail[:-1]
     rows = []
     controls = 0
     for number, line in enumerate(blob.split(b'\n'), 1):
