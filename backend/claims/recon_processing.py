@@ -14,6 +14,7 @@ from pathlib import Path
 from django.db import transaction
 from django.utils import timezone
 from .models import ClientFolderConfig, ReconFile, ReconRecord, FolderScanItem
+from .smb_auth import connect_for_edi_path
 from .rule_engine import rules_for, has_rules, rule_files
 
 CSV_SUFFIXES={'.csv'}
@@ -103,8 +104,9 @@ def scan_recon_files(client, run=None):
         for rule in rules:
             if rule:
                 try:
+                    connect_for_edi_path(client, rule.folder_path)
                     sources=sorted(rule_files(rule))
-                except (OSError,ValueError) as exc:
+                except (OSError,ValueError,RuntimeError) as exc:
                     result(recon_kind(folder_key),Path(rule.folder_path),'failed',message=str(exc))
                     continue
             else:
@@ -114,7 +116,13 @@ def scan_recon_files(client, run=None):
                        'recon':'windows_recon_path'}[folder_key]
                 original=getattr(cfg,field,'') if cfg else ''
                 folder=(Path(original) if os.name=='nt' and original
-                        else approved/client.code/folder_key).resolve()
+                        else approved/client.code/folder_key)
+                try:
+                    connect_for_edi_path(client, folder)
+                    folder=folder.resolve()
+                except (OSError, RuntimeError) as exc:
+                    result(recon_kind(folder_key),folder,'failed',message=str(exc))
+                    continue
                 if not folder.is_dir():
                     # Unconfigured optional folders are deliberately ignored.
                     continue

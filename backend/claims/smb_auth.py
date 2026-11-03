@@ -1,4 +1,4 @@
-"""Windows SMB authentication for configured WGS 835/837 sources.
+"""Windows SMB authentication for the approved Bicc share.
 
 Scheduler and downloads share a persistent connection guard. This uses Windows' native WNet API,
 not shell commands, and never logs passwords.
@@ -36,11 +36,11 @@ def decrypt_password(value):
 
 def connect_share(client):
     """Reserve one attempt before contacting Windows, even across processes."""
-    if os.name != 'nt' or client.code.upper() != 'WGS':
+    if os.name != 'nt':
         return False
-    cfg = SmbCredential.objects.filter(client=client).first()
+    cfg = SmbCredential.objects.filter(client__code="WGS", share_path__iexact=DEFAULT_SHARE).first()
     if cfg is None:
-        raise RuntimeError('WGS SMB credentials not configured in Settings.')
+        raise RuntimeError("Shared Bicc credentials not configured in WGS Settings.")
     password = decrypt_password(cfg.password_ciphertext)
     host = cfg.share_path.lstrip('\\').split('\\', 1)[0].casefold()
     guard = key_path().parent / 'axiom_smb_guard.sqlite3'
@@ -82,11 +82,9 @@ def _connect_windows(share, username, password):
 
 
 def connect_for_edi_path(client, path):
-    """Connect only for WGS EDI files beneath the configured share."""
-    if os.name!='nt' or client.code.upper()!='WGS':return
-    cfg=SmbCredential.objects.filter(client=client).first()
-    if not cfg:return
-    target=str(path).replace('/','\\').casefold()
-    share=cfg.share_path.rstrip('\\').casefold()
-    if target.startswith(share+'\\'):
-        connect_share(client)
+    """Use the shared credential only for the exact Bicc share."""
+    target = str(path).replace('/', chr(92)).rstrip(chr(92)).casefold()
+    share = DEFAULT_SHARE.casefold()
+    if target == share or target.startswith(share + chr(92)):
+        return connect_share(client)
+    return False

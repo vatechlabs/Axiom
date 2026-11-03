@@ -182,7 +182,7 @@ def edi_download(request,pk,doc_id):
   from .models import FileSourceRule
   from .smb_auth import DEFAULT_SHARE
   candidate=str(path).casefold()
-  allowed_unc=(client.code.upper()=='WGS' and candidate.startswith(DEFAULT_SHARE.casefold()+chr(92)) and
+  allowed_unc=(candidate.startswith(DEFAULT_SHARE.casefold()+chr(92)) and
                any(candidate.startswith(str(Path(r.folder_path)).casefold().rstrip(chr(92))+chr(92))
                    for r in FileSourceRule.objects.filter(client=client,file_type=doc.kind,enabled=True)))
   if not allowed_unc:return Response({'detail':'EDI path not permitted'},status=403)
