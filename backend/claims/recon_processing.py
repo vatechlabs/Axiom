@@ -18,7 +18,7 @@ from .smb_auth import connect_for_edi_path
 from .rule_engine import rules_for, has_rules, rule_files
 
 CSV_SUFFIXES={'.csv'}
-PA7_SUFFIXES={'.pa7'}
+PA7_SUFFIXES={'.pa7', '.p7a'}
 SUPPORTED=CSV_SUFFIXES|PA7_SUFFIXES
 
 
@@ -53,7 +53,7 @@ def parse_records(path):
             if not claim:continue
             date=None  # LST-PROC-DT is processing date, NOT proven claim date
             yield number,claim,date,row
-    elif suffix == '.pa7':
+    elif suffix in PA7_SUFFIXES:
         for number,line in enumerate(text.splitlines(),start=1):
             if not line.strip():continue
             if len(line)!=150:
@@ -61,7 +61,7 @@ def parse_records(path):
             # Layout documentation required to interpret individual PA7 columns.
             yield number,line[:15].strip(),None,{'raw_line':line,'layout':'PA7_UNMAPPED','record_key_unverified':line[:15].strip()}
     else:
-        raise ValueError('Unsupported RECON extension (supported: .csv, .PA7).')
+        raise ValueError('Unsupported RECON extension (supported: .csv, .PA7, .P7A).')
 
 
 def source_folders(client):
