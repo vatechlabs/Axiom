@@ -81,7 +81,8 @@ def perform_scan(run,schedule):
                     continue
                 if kind=='error' and suffix!='.txt':
                     continue
-                if (kind!='error' and suffix not in ('.edi','.'+kind,'.txt')
+                highmark_x12 = kind == '835' and client.code.upper() in HIGHMARK_CODES and suffix == '.x12'
+                if (kind!='error' and suffix not in ('.edi','.'+kind,'.txt') and not highmark_x12
                         and not (kind=='837' and client.code.upper() in HIGHMARK_CODES
                                  and highmark_extensionless_837(path))):
                     continue
