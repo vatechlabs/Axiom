@@ -1,10 +1,12 @@
 """Windows SMB authentication for configured WGS 835/837 sources.
 
-Only the scheduler calls connect_share(). This uses Windows' native WNet API,
+Scheduler and downloads share a persistent connection guard. This uses Windows' native WNet API,
 not shell commands, and never logs passwords.
 """
 import ctypes
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from ctypes import wintypes
 from django.conf import settings
@@ -33,19 +35,33 @@ def decrypt_password(value):
         raise RuntimeError('Cannot decrypt SMB password; check the encryption key file.') from exc
 
 def connect_share(client):
-    """Authenticate within the process performing network I/O, never in a shell session.
-
-    This connection is kept for the lifetime of the process so subsequent reads
-    and API download operations can use it. Separate backend process must also
-    establish its own session before reading EDI files.
-    """
+    """Reserve one attempt before contacting Windows, even across processes."""
     if os.name != 'nt' or client.code.upper() != 'WGS':
         return False
-    cfg=SmbCredential.objects.filter(client=client).first()
+    cfg = SmbCredential.objects.filter(client=client).first()
     if cfg is None:
         raise RuntimeError('WGS SMB credentials not configured in Settings.')
-    password=decrypt_password(cfg.password_ciphertext)
-    share=cfg.share_path
+    password = decrypt_password(cfg.password_ciphertext)
+    host = cfg.share_path.lstrip('\\').split('\\', 1)[0].casefold()
+    guard = key_path().parent / 'axiom_smb_guard.sqlite3'
+    with closing(sqlite3.connect(guard)) as db:
+        with db:
+            db.execute(
+                'CREATE TABLE IF NOT EXISTS blocked (host TEXT PRIMARY KEY)'
+            )
+            reserved = db.execute(
+                'INSERT OR IGNORE INTO blocked VALUES (?)', (host,)
+            ).rowcount
+        if not reserved:
+            raise OSError(f'SMB connection blocked for {host}; contact an administrator.')
+        # Commit before the network call. A crash leaves the host blocked.
+        _connect_windows(cfg.share_path, cfg.username, password)
+        with db:
+            db.execute('DELETE FROM blocked WHERE host = ?', (host,))
+    return True
+
+
+def _connect_windows(share, username, password):
     class NETRESOURCEW(ctypes.Structure):
         _fields_=[('dwScope',wintypes.DWORD),('dwType',wintypes.DWORD),
                   ('dwDisplayType',wintypes.DWORD),('dwUsage',wintypes.DWORD),
@@ -58,14 +74,12 @@ def connect_share(client):
     func.argtypes=[ctypes.POINTER(NETRESOURCEW),wintypes.LPCWSTR,wintypes.LPCWSTR,wintypes.DWORD]
     func.restype=wintypes.DWORD
     try:
-        code=func(ctypes.byref(resource),password,cfg.username,0)
+        code=func(ctypes.byref(resource),password,username,0)
     finally:
         password=None
-    if code not in (0,85):
-        # ERROR_ALREADY_ASSIGNED (85) can represent an existing connection;
-        # an actual folder-read check remains necessary to prove accessibility.
+    if code:
         raise OSError(f'SMB connection failed (Windows error {code}) for {share}; verify credentials and share permissions.')
-    return True
+
 
 def connect_for_edi_path(client, path):
     """Connect only for WGS EDI files beneath the configured share."""
