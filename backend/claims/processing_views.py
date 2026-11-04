@@ -69,8 +69,12 @@ def processing_status(request):
     except ValueError:return Response({'detail':'Invalid page'},status=400)
     items=[];total=0
     if run:
-        total=run.items.count()
-        records=list(run.items.all()[(page-1)*25:page*25])
+        # AXIOM_HISTORY_OUTCOMES_ONLY_V1: Only newly indexed and failed
+        # entries belong in the detailed table. Unchanged/deferred totals
+        # remain visible in the summary above it.
+        visible_items=run.items.filter(status__in=('indexed','failed'))
+        total=visible_items.count()
+        records=list(visible_items[(page-1)*25:page*25])
         file_ids=[r.edi_file_id for r in records if r.edi_file_id]
         batch_ids=[r.import_batch_id for r in records if r.import_batch_id]
         edi_counts={r['edi_file_id']:r['n'] for r in EdiDocument.objects.filter(claim__client=client,edi_file_id__in=file_ids).order_by().values('edi_file_id').annotate(n=Count('claim_id',distinct=True))}
