@@ -36,7 +36,12 @@ def parse_mir(blob, received):
         if len(line) < (217 if received else 19):
             raise ValueError(f'MIR row {number}: truncated record')
         identifier = line[2:19].decode('ascii').strip()
-        if not identifier or not identifier.isalnum():
+        # AXIOM_MIR_NA_PLACEHOLDER_V1: Carrier uses N/A for a missing claim
+        # identifier. Preserve the full MIR row with an empty link key; never
+        # treat N/A as an actual claim identifier or silently skip the row.
+        if identifier.upper() == 'N/A':
+            identifier = ''
+        elif not identifier or not identifier.isalnum():
             raise ValueError(f'MIR row {number}: invalid claim identifier')
         error = line[207:217].decode('cp1252').strip() if received else ''
         rows.append((number, identifier, error, line.decode('cp1252')))
@@ -67,7 +72,10 @@ def relink_mir(client):
         candidates[(group, doc.edi_index.claim_identifier.strip())].add(doc.claim_id)
     pending = []
     for record in MirRecord.objects.filter(source__client=client).select_related('source').iterator(chunk_size=1000):
-        matches = candidates.get((record.source.sub_client, record.claim_identifier), set())
+        # Missing identifiers must never match a claim (including after a later
+        # LAG upload or EDI reconciliation). Clear any old accidental links.
+        matches = (candidates.get((record.source.sub_client, record.claim_identifier), set())
+                   if record.claim_identifier else set())
         claim_id = next(iter(matches)) if len(matches) == 1 else None
         if record.claim_id != claim_id:
             record.claim_id = claim_id
@@ -120,7 +128,13 @@ def scan_mir_files(client, run):
                                         for n, identifier, error, line in rows
                                     ], batch_size=1000)
                                 status, count = 'indexed', len(rows)
-                                message = f'{controls} carrier control records skipped' if controls else ''
+                                notes = []
+                                if controls:
+                                    notes.append(f'{controls} carrier control records skipped')
+                                missing_ids = sum(not identifier for _, identifier, _, _ in rows)
+                                if missing_ids:
+                                    notes.append(f'{missing_ids} N/A identifier rows preserved without claim links')
+                                message = '; '.join(notes)
                         totals[{'indexed': 'processed', 'unchanged': 'skipped', 'deferred': 'deferred'}[status]] += 1
                         FolderScanItem.objects.create(run=run, kind=kind, path=str(path), filename=path.name[:255],
                                                       status=status, indexed_count=count, message=message)
