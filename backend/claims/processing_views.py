@@ -88,8 +88,7 @@ def processing_status(request):
 
 @api_view(['GET'])
 def upload_history(request):
-    """Admin-only, client-scoped rolling 30-day audit. Links reflect current data."""
-    from datetime import timedelta
+    """Admin-only, client-scoped retained audit. Links reflect current data."""
     from django.db.models import OuterRef, Subquery, IntegerField, Value
     from django.db.models.functions import Coalesce
     from .models import UploadEvent
@@ -103,8 +102,25 @@ def upload_history(request):
     except (TypeError, ValueError):
         return Response({'detail': 'Page must be a positive integer.'}, status=400)
     end = timezone.now()
-    start = end - timedelta(days=30)
-    qs = UploadEvent.objects.filter(client=client, occurred_at__gte=start, occurred_at__lte=end)
+    start = request.query_params.get('date_from') or None
+    qs = UploadEvent.objects.filter(client=client, occurred_at__lte=end)
+    from datetime import date
+    from django.db.models import Q
+    for param, lookup in (('date_from', 'gte'), ('date_to', 'lte')):
+        raw = request.query_params.get(param, '')
+        if raw:
+            try:
+                value = date.fromisoformat(raw)
+            except ValueError:
+                return Response({'detail': param + ' must be YYYY-MM-DD'}, status=400)
+            qs = qs.filter(**{'occurred_at__date__' + lookup: value})
+    if request.query_params.get('date_from', '') > (request.query_params.get('date_to') or '9999-12-31'):
+        return Response({'detail': 'From date must not exceed to date.'}, status=400)
+    search = request.query_params.get('search', '').strip()
+    if search:
+        qs = qs.filter(Q(filename__icontains=search) | Q(kind__icontains=search) |
+                       Q(status__icontains=search) | Q(sub_client__icontains=search) |
+                       Q(trigger__icontains=search) | Q(message__icontains=search))
     for field in ('kind', 'status', 'sub_client'):
         value = request.query_params.get(field, '').strip()
         if value:

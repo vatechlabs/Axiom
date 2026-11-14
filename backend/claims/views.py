@@ -122,6 +122,20 @@ def claims(request):
  rows=rows_for(qs[start:start+page_size],batch.report_date) if batch else []
  return Response({'count':total,'page':page,'page_size':page_size,'total_pages':(total+page_size-1)//page_size,'results':rows})
 
+def lag_comparison(client, batch, current):
+ previous = lag_batches(client).filter(report_date__lt=batch.report_date).first()
+ if not previous:return None
+ old = highmark_snapshot_query(client, previous.report_date) if is_highmark(client) else snapshot_query(client, previous)
+ def identities(qs):
+  return {row['s_number']: {'claim_number':row['s_number'], 'dcn':row['s_dcn'], 'fund':row['s_fund']}
+          for row in qs.order_by('id').values('s_number','s_dcn','s_fund')}
+ before, after = identities(old), identities(current)
+ added = sorted(after.keys() - before.keys())
+ removed = sorted(before.keys() - after.keys())
+ return {'previous_date':str(previous.report_date), 'current_date':str(batch.report_date),
+         'previous_count':len(before), 'current_count':len(after), 'delta':len(after)-len(before),
+         'added':[after[key] for key in added], 'removed':[before[key] for key in removed]}
+
 @api_view(['GET'])
 def dashboard(request):
  client=allowed_client(request)
@@ -134,7 +148,7 @@ def dashboard(request):
  totals=qs.aggregate(total=Count('id'),over_60=Count('id',filter=Q(s_tpa_age__gte=60)),with_errors=Count('id',filter=~Q(s_error='')))
  funds=list(qs.order_by().exclude(s_fund='').values('s_fund').annotate(n=Count('id')).order_by('-n','s_fund'))
  errors=list(qs.order_by().exclude(s_error='').values('s_error').annotate(n=Count('id')).order_by('-n','s_error'))
- return Response({'lag_date':str(batch.report_date),'lag_batch_id':batch.id,**totals,
+ return Response({'lag_date':str(batch.report_date),'lag_batch_id':batch.id,**totals,'comparison':lag_comparison(client,batch,base),
                   'top_errors':[{'error_message':x['s_error'],'count':x['n']} for x in errors[:5]],
                   'fund_counts':[{'fund':x['s_fund'],'count':x['n']} for x in funds[:5]],
                   'filter_options':{'funds':sorted(x['s_fund'] for x in funds),'errors':sorted(x['s_error'] for x in errors)},

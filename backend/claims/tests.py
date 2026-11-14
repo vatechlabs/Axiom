@@ -57,6 +57,20 @@ class DailyLagSnapshotTests(TestCase):
         self.claim=Claim.objects.create(client=self.client,claim_number='CLAIM-1',report_date=date(2026,8,2),fund='New fund',tpa_age=8,total_age=10,lag_batch=self.b2)
         LagClaimSnapshot.objects.create(client=self.client,batch=self.b1,claim=self.claim,row_number=2,sheet_name='LOCAL CLMS',row_data={'_snapshot':{'claim_number':'CLAIM-1','fund':'Old fund','tpa_age':2,'total_age':3}})
         LagClaimSnapshot.objects.create(client=self.client,batch=self.b2,claim=self.claim,row_number=2,sheet_name='LOCAL CLMS',row_data={'_snapshot':{'claim_number':'CLAIM-1','fund':'New fund','tpa_age':8,'total_age':10}})
+    def test_comparison_detects_turnover_even_with_zero_net_change(self):
+        from .models import LagClaimSnapshot
+        from .views import lag_comparison
+        from .querying import snapshot_query
+        for batch, number in ((self.b1, 'REMOVED'), (self.b2, 'ADDED')):
+            claim = Claim.objects.create(client=self.client, claim_number=number, report_date=batch.report_date)
+            LagClaimSnapshot.objects.create(client=self.client, batch=batch, claim=claim, row_number=3,
+                sheet_name='LOCAL CLMS', row_data={'_snapshot':{'claim_number':number}})
+        result = lag_comparison(self.client, self.b2, snapshot_query(self.client, self.b2))
+        self.assertEqual(result['delta'], 0)
+        self.assertEqual([r['claim_number'] for r in result['added']], ['ADDED'])
+        self.assertEqual([r['claim_number'] for r in result['removed']], ['REMOVED'])
+        self.assertIsNone(lag_comparison(self.client, self.b1, snapshot_query(self.client, self.b1)))
+
     def test_historical_lag_is_not_overwritten_by_current_claim(self):
         from .views import snapshot_rows
         class R:
@@ -91,3 +105,25 @@ class DailyLagSnapshotTests(TestCase):
         self.assertEqual(len(ids),len(set(ids)))
         invalid=HttpClient().get(base+'&page_size=999',**headers)
         self.assertEqual(invalid.status_code,400)
+
+class UploadHistoryFilterTests(TestCase):
+    def test_date_search_and_client_scope(self):
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIClient
+        from .models import UploadEvent
+        from datetime import datetime, timezone
+        client = Client.objects.create(code='WGS', name='WGS')
+        other = Client.objects.create(code='OTHER', name='Other')
+        user = get_user_model().objects.create_superuser(username='historyadmin', password='test-pass')
+        api = APIClient()
+        api.force_authenticate(user=user)
+        for i, tenant in enumerate((client, other)):
+            UploadEvent.objects.create(client=tenant, filename='nov6.837', kind='837', status='indexed',
+                source_key=str(i), occurred_at=datetime(2026, 11, 6, 12, tzinfo=timezone.utc))
+        url = '/api/processing/history/?client=WGS&date_from=2026-11-06&date_to=2026-11-06&kind=837&search=NOV6'
+        result = api.get(url)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()['count'], 1)
+        self.assertEqual(api.get(url.replace('NOV6', 'missing')).json()['count'], 0)
+        self.assertEqual(api.get('/api/processing/history/?client=WGS&date_from=bad').status_code, 400)
+        self.assertEqual(api.get('/api/processing/history/?client=WGS&date_from=2026-11-07&date_to=2026-11-06').status_code, 400)
