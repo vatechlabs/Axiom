@@ -126,15 +126,13 @@ def lag_comparison(client, batch, current):
  previous = lag_batches(client).filter(report_date__lt=batch.report_date).first()
  if not previous:return None
  old = highmark_snapshot_query(client, previous.report_date) if is_highmark(client) else snapshot_query(client, previous)
- def identities(qs):
-  return {row['s_number']: {'claim_number':row['s_number'], 'dcn':row['s_dcn'], 'fund':row['s_fund']}
-          for row in qs.order_by('id').values('s_number','s_dcn','s_fund')}
- before, after = identities(old), identities(current)
- added = sorted(after.keys() - before.keys())
- removed = sorted(before.keys() - after.keys())
+ current_numbers = current.order_by().values_list('s_number', flat=True)
+ reduced = old.filter(s_tpa_age__gt=20).exclude(s_number__in=current_numbers)
+ rows = {row['s_number']: {'claim_number':row['s_number'], 'dcn':row['s_dcn'],
+                         'fund':row['s_fund'], 'tpa_age':row['s_tpa_age']}
+         for row in reduced.order_by('s_number','id').values('s_number','s_dcn','s_fund','s_tpa_age')}
  return {'previous_date':str(previous.report_date), 'current_date':str(batch.report_date),
-         'previous_count':len(before), 'current_count':len(after), 'delta':len(after)-len(before),
-         'added':[after[key] for key in added], 'removed':[before[key] for key in removed]}
+         'reduced_count':len(rows), 'reduced':list(rows.values())}
 
 @api_view(['GET'])
 def dashboard(request):

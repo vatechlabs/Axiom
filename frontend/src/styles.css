@@ -121,3 +121,13 @@
 /* Highmark raw PA7 source fields: display actual original characters, never guessed labels. */
 .recon-table .recon-raw-cell {min-width:135px;max-width:230px;vertical-align:top;}
 .recon-table .recon-raw-cell span {display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;line-height:1.55;}
+
+/* Compact overview cards stay together on desktop. */
+.overview-kpis{grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.overview-kpis .kpi{min-width:0;padding:18px 16px}
+.overview-kpis .kpi-label{font-size:11px;gap:6px;min-height:36px}
+.overview-kpis .kpi-value{font-size:30px;margin:12px 0}
+.overview-kpis .kpi-sub{font-size:10px;line-height:1.5}
+.overview-kpis .kpi-icon{width:30px;height:30px;flex-shrink:0}
+.overview-kpis .btn{margin-top:6px}
+@media(max-width:850px){.overview-kpis{grid-template-columns:repeat(5,minmax(155px,1fr));overflow-x:auto;padding-bottom:8px}}

@@ -57,18 +57,20 @@ class DailyLagSnapshotTests(TestCase):
         self.claim=Claim.objects.create(client=self.client,claim_number='CLAIM-1',report_date=date(2026,8,2),fund='New fund',tpa_age=8,total_age=10,lag_batch=self.b2)
         LagClaimSnapshot.objects.create(client=self.client,batch=self.b1,claim=self.claim,row_number=2,sheet_name='LOCAL CLMS',row_data={'_snapshot':{'claim_number':'CLAIM-1','fund':'Old fund','tpa_age':2,'total_age':3}})
         LagClaimSnapshot.objects.create(client=self.client,batch=self.b2,claim=self.claim,row_number=2,sheet_name='LOCAL CLMS',row_data={'_snapshot':{'claim_number':'CLAIM-1','fund':'New fund','tpa_age':8,'total_age':10}})
-    def test_comparison_detects_turnover_even_with_zero_net_change(self):
+    def test_comparison_counts_only_removed_claims_strictly_above_20(self):
         from .models import LagClaimSnapshot
         from .views import lag_comparison
         from .querying import snapshot_query
-        for batch, number in ((self.b1, 'REMOVED'), (self.b2, 'ADDED')):
-            claim = Claim.objects.create(client=self.client, claim_number=number, report_date=batch.report_date)
-            LagClaimSnapshot.objects.create(client=self.client, batch=batch, claim=claim, row_number=3,
-                sheet_name='LOCAL CLMS', row_data={'_snapshot':{'claim_number':number}})
+        for index, (number, age, remains) in enumerate((('REMOVED21',21,False), ('REMOVED20',20,False),
+                                                     ('REMOVED19',19,False), ('STILLHERE',30,True))):
+            claim = Claim.objects.create(client=self.client, claim_number=number, report_date=self.b1.report_date)
+            for batch in ([self.b1,self.b2] if remains else [self.b1]):
+                LagClaimSnapshot.objects.create(client=self.client, batch=batch, claim=claim, row_number=index+3,
+                    sheet_name='LOCAL CLMS', row_data={'_snapshot':{'claim_number':number,'tpa_age':age if batch==self.b1 else 5}})
         result = lag_comparison(self.client, self.b2, snapshot_query(self.client, self.b2))
-        self.assertEqual(result['delta'], 0)
-        self.assertEqual([r['claim_number'] for r in result['added']], ['ADDED'])
-        self.assertEqual([r['claim_number'] for r in result['removed']], ['REMOVED'])
+        self.assertEqual(result['reduced_count'], 1)
+        self.assertEqual([r['claim_number'] for r in result['reduced']], ['REMOVED21'])
+        self.assertEqual(result['reduced'][0]['tpa_age'], 21)
         self.assertIsNone(lag_comparison(self.client, self.b1, snapshot_query(self.client, self.b1)))
 
     def test_historical_lag_is_not_overwritten_by_current_claim(self):
