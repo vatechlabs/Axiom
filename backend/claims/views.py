@@ -131,7 +131,7 @@ def dashboard(request):
   return Response({'lag_date':None,'lag_batch_id':None,'total':0,'over_60':0,'with_errors':0,'top_errors':[],'fund_counts':[],'filter_options':{'funds':[],'errors':[]},'attention':[]})
  base=active_rows(request,client,batch)
  qs=filter_query(base,request.query_params)
- totals=qs.aggregate(total=Count('id'),over_60=Count('id',filter=Q(s_total_age__gt=60)),with_errors=Count('id',filter=~Q(s_error='')))
+ totals=qs.aggregate(total=Count('id'),over_60=Count('id',filter=Q(s_tpa_age__gte=60)),with_errors=Count('id',filter=~Q(s_error='')))
  funds=list(qs.order_by().exclude(s_fund='').values('s_fund').annotate(n=Count('id')).order_by('-n','s_fund'))
  errors=list(qs.order_by().exclude(s_error='').values('s_error').annotate(n=Count('id')).order_by('-n','s_error'))
  return Response({'lag_date':str(batch.report_date),'lag_batch_id':batch.id,**totals,
@@ -229,28 +229,37 @@ def export_claims(request):
 
 @api_view(['POST'])
 def upload_lag(request):
+ from .upload_history import record_lag_attempt
+ from uuid import uuid4
+ key='lag-attempt:'+uuid4().hex
+ def finish(response, batch=None):
+  record_lag_attempt(request, response, key, batch)
+  return response
+ return _upload_lag(request, finish)
+
+def _upload_lag(request, finish):
  client=allowed_client(request);can_edit(request,client)
  uploaded=request.FILES.get('file')
- if not uploaded:return Response({'detail':'Attach an Excel workbook'},status=400)
- if not uploaded.name.lower().endswith('.xlsx'):return Response({'detail':'Only .xlsx accepted'},status=400)
- if uploaded.size>30*1024*1024:return Response({'detail':'Workbook exceeds 30 MB'},status=400)
+ if not uploaded:return finish(Response({'detail':'Attach an Excel workbook'},status=400))
+ if not uploaded.name.lower().endswith('.xlsx'):return finish(Response({'detail':'Only .xlsx accepted'},status=400))
+ if uploaded.size>30*1024*1024:return finish(Response({'detail':'Workbook exceeds 30 MB'},status=400))
  from datetime import datetime
  from django.utils import timezone
  date_text=request.data.get('report_date','')
  if date_text:
   try:rd=date.fromisoformat(date_text)
-  except ValueError:return Response({'detail':'report_date must be YYYY-MM-DD'},status=400)
+  except ValueError:return finish(Response({'detail':'report_date must be YYYY-MM-DD'},status=400))
  else:
   rd=timezone.localdate()
  password=request.data.get('password','')
  try:
   batch,duplicate=import_lag(client,uploaded.read(),uploaded.name,rd,password,request.user)
- except ValueError as exc:return Response({'detail':str(exc)},status=400)
+ except ValueError as exc:return finish(Response({'detail':str(exc)},status=400))
  except Exception:
   import logging
   logging.getLogger(__name__).exception('LAG import error')
-  return Response({'detail':'Import failed. See server logs.'},status=500)
- return Response({'processed':batch.processed_count,'duplicate':duplicate,'batch_id':batch.pk,'report_date':str(batch.report_date),'detail':('Duplicate Highmark LAG report: already uploaded; no records changed.' if duplicate and is_highmark(client) else 'LAG report indexed.')},status=200 if duplicate else 201)
+  return finish(Response({'detail':'Import failed. See server logs.'},status=500))
+ return finish(Response({'processed':batch.processed_count,'duplicate':duplicate,'batch_id':batch.pk,'report_date':str(batch.report_date),'detail':('Duplicate Highmark LAG report: already uploaded; no records changed.' if duplicate and is_highmark(client) else 'LAG report indexed.')},status=200 if duplicate else 201), batch)
 
 @api_view(['GET','PUT'])
 def highmark_fund_settings(request):

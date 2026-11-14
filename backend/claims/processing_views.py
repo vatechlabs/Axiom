@@ -84,3 +84,38 @@ def processing_status(request):
             items.append({'id':item.pk,'kind':item.kind,'filename':item.filename,'status':item.status,'indexed_count':item.indexed_count,'matched_claims':matched,'message':item.message})
     result.update(selected_run=run.pk if run else None,items=items,count=total,page=page,total_pages=(total+24)//25)
     return Response(result)
+
+
+@api_view(['GET'])
+def upload_history(request):
+    """Admin-only, client-scoped rolling 30-day audit. Links reflect current data."""
+    from datetime import timedelta
+    from django.db.models import OuterRef, Subquery, IntegerField, Value
+    from django.db.models.functions import Coalesce
+    from .models import UploadEvent
+    if not is_operator(request.user):
+        return Response({'detail': 'Only administrators may view upload history.'}, status=403)
+    client = allowed_client(request)
+    try:
+        page = int(request.query_params.get('page', '1'))
+        if page < 1:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return Response({'detail': 'Page must be a positive integer.'}, status=400)
+    end = timezone.now()
+    start = end - timedelta(days=30)
+    qs = UploadEvent.objects.filter(client=client, occurred_at__gte=start, occurred_at__lte=end)
+    for field in ('kind', 'status', 'sub_client'):
+        value = request.query_params.get(field, '').strip()
+        if value:
+            qs = qs.filter(**{field: value})
+    count = qs.count()
+    links = EdiDocument.objects.filter(edi_file_id=OuterRef('edi_file_id'), claim__client=client).order_by().values('edi_file_id').annotate(n=Count('claim_id', distinct=True)).values('n')
+    records = qs.annotate(linked=Coalesce(Subquery(links, output_field=IntegerField()), Value(0)))[(page-1)*50:page*50]
+    return Response({'count': count, 'page': page, 'page_size': 50, 'total_pages': (count+49)//50,
+                     'from': start, 'to': end, 'results': [
+        {'id': e.pk, 'occurred_at': e.occurred_at, 'filename': e.filename,
+         'kind': e.kind, 'sub_client': e.sub_client, 'trigger': e.trigger,
+         'status': e.status, 'record_count': e.record_count,
+         'linked_claims': e.linked if e.edi_file_id else None, 'message': e.message}
+        for e in records]})

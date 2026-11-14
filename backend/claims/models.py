@@ -280,3 +280,22 @@ class MirRecord(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['source', 'row_number'], name='unique_mir_row')]
+
+
+class UploadEvent(models.Model):
+    """Immutable processing outcomes; source records may later be reindexed."""
+    client = models.ForeignKey(Client, on_delete=models.CASCADE)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    filename = models.CharField(max_length=255)
+    kind = models.CharField(max_length=16)
+    sub_client = models.CharField(max_length=24, blank=True)
+    trigger = models.CharField(max_length=24, default='manual')
+    status = models.CharField(max_length=24)
+    record_count = models.PositiveIntegerField(default=0)
+    message = models.TextField(blank=True)
+    source_key = models.CharField(max_length=80, unique=True)
+    edi_file = models.ForeignKey(EdiFile, null=True, blank=True, on_delete=models.SET_NULL)
+    batch = models.ForeignKey(ImportBatch, null=True, blank=True, on_delete=models.SET_NULL)
+    class Meta:
+        ordering = ['-occurred_at', '-id']
+        indexes = [models.Index(fields=['client', '-occurred_at', '-id'], name='upload_client_time_idx')]

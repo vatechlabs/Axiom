@@ -126,11 +126,13 @@ def scan_rule_entries(rule):
     included=[p.strip().replace('\\','/').strip('/') for p in rule.include_subfolders.split(',') if p.strip()]
     excluded=[p.strip().replace('\\','/').strip('/').casefold() for p in rule.exclude_subfolders.split(',') if p.strip()]
     target_dirs=[root]
+    missing_dirs=[]
     for rel in included:
         target=root.joinpath(*rel.split('/'))
         if not target.resolve().is_relative_to(root):
             raise ValueError('Included folder outside approved root')
         if target.is_dir():target_dirs.append(target)
+        else:missing_dirs.append(str(target))
     def enumerate_dir(directory, recursive):
         with os.scandir(directory) as directory_entries:
             entries=sorted(directory_entries,key=lambda e:e.name.casefold())
@@ -149,3 +151,6 @@ def scan_rule_entries(rule):
     else:
         for directory in target_dirs:
             yield from enumerate_dir(directory,directory!=root)
+
+    if not rule.recursive and missing_dirs:
+        raise ValueError('Configured subfolder missing or inaccessible: '+', '.join(missing_dirs)+'. Check folder spelling and share permissions.')

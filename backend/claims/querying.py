@@ -110,7 +110,7 @@ def filter_query(qs, params):
             qs = qs.filter(**{f's_{field}__{lookup}': number})
         if bounds.get('min', 0) > bounds.get('max', float('inf')):
             raise ValidationError({'detail': f'{field}: minimum exceeds maximum'})
-    return qs.order_by('-s_total_age', 's_number', 'id')
+    return qs.order_by('-s_tpa_age', 's_number', 'id')
 
 
 def rows_for(queryset, report_date):
