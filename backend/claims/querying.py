@@ -1,7 +1,7 @@
 """Database-side daily snapshot filtering; enrich only the requested page."""
 from django.db.models import Q, F, Value, OuterRef, Subquery, TextField, IntegerField, FloatField, Count, Min
 from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Coalesce, NullIf, Cast
+from django.db.models.functions import Coalesce, NullIf, Cast, ExtractDay
 from rest_framework.exceptions import ValidationError
 from .models import LagClaimSnapshot, ErrorHistory, EdiDocument, MirRecord
 
@@ -27,7 +27,10 @@ def snapshot_query(client, batch):
     first_ids = base.order_by().values('s_number').annotate(first=Min('id')).values('first')
     latest = ErrorHistory.objects.filter(claim_id=OuterRef('claim_id'), report_date__lte=batch.report_date).order_by('-report_date', '-id')
     return base.filter(id__in=Subquery(first_ids)).annotate(
-        s_error=Coalesce(Subquery(latest.values('message')[:1]), Value(''), output_field=TextField())
+        s_error=Coalesce(Subquery(latest.values('message')[:1]), Value(''), output_field=TextField()),
+        s_latest_error_date=Subquery(latest.values('report_date')[:1]),
+    ).annotate(
+        s_error_age=ExtractDay(F('batch__report_date') - F('s_latest_error_date')),
     )
 
 
@@ -71,10 +74,13 @@ def highmark_snapshot_query(client, selected_date=None):
     mir_errors = MirRecord.objects.filter(claim_id=OuterRef('claim_id'), source__source_type='mir_received')
     if selected_date:
         mir_errors = mir_errors.filter(source__source_date__lte=selected_date)
-    return base.annotate(s_error=Coalesce(
+    return base.annotate(
+        s_latest_error_date=Subquery(latest_errors.order_by('-report_date','-id').values('report_date')[:1]),
+        s_error=Coalesce(
         Subquery(mir_errors.order_by('-source__source_date', '-id').values('error_text')[:1]),
         Subquery(latest_errors.order_by('-report_date','-id').values('message')[:1]),
-        Value(''), output_field=TextField()))
+        Value(''), output_field=TextField()),
+    ).annotate(s_error_age=ExtractDay(F('batch__report_date') - F('s_latest_error_date')))
 
 def filter_query(qs, params):
     def many(key):
@@ -84,6 +90,16 @@ def filter_query(qs, params):
         return value if isinstance(value, list) else [value] if value else []
     funds = many('fund')
     errors = many('error')
+    include_tpa_gt_error_age = str(params.get('include_tpa_gt_error_age', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    is_wgs = str(params.get('client', '')).strip().upper() == 'WGS'
+    if is_wgs and not include_tpa_gt_error_age:
+        qs = qs.exclude(
+            Q(sheet_name__icontains='ADJ') &
+            Q(s_error__icontains='Claim not found in DDC') &
+            Q(s_latest_error_date__isnull=False) &
+            Q(s_error_age__isnull=False) &
+            Q(s_tpa_age__gt=F('s_error_age'))
+        )
     if funds:
         qs = qs.filter(s_fund__in=funds)
     if errors:
