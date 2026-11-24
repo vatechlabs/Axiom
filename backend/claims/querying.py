@@ -98,7 +98,7 @@ def filter_query(qs, params):
             Q(s_error__icontains='Claim not found in DDC') &
             Q(s_latest_error_date__isnull=False) &
             Q(s_error_age__isnull=False) &
-            Q(s_tpa_age__gt=F('s_error_age'))
+            Q(s_tpa_age__lt=F('s_error_age'))
         )
     if funds:
         qs = qs.filter(s_fund__in=funds)
